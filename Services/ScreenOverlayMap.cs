@@ -32,9 +32,7 @@ public sealed class ScreenOverlayMap : IDisposable
             {
                 var screenPreview = preview with
                 {
-                    Display = item.Display,
-                    CurrentRegion = item.Display.Bounds,
-                    SelectedRegion = item.Display.Bounds
+                    Display = item.Display
                 };
                 item.Window.ShowPreview(
                     screenPreview,

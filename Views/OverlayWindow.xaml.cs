@@ -1,23 +1,31 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
+using System.Windows.Media;
 using MouseAccelerator.Services;
 
 namespace MouseAccelerator.Views;
 
 public partial class OverlayWindow : Window
 {
+    private const int VisibleRingCount = 4;
+
+    private readonly List<(int Row, int Column, Border Cell)> _floatingCells = [];
+    private readonly System.Windows.Media.Brush _accentBrush =
+        new SolidColorBrush(System.Windows.Media.Color.FromArgb(0x52, 0x17, 0xB6, 0xA4));
+    private readonly System.Windows.Media.Brush _softAccentBrush =
+        new SolidColorBrush(System.Windows.Media.Color.FromArgb(0x15, 0x17, 0xB6, 0xA4));
+    private readonly System.Windows.Media.Brush _transparentBrush =
+        System.Windows.Media.Brushes.Transparent;
     private nint _handle;
     private DisplayMonitor? _mappedDisplay;
     private NineGridPreview? _preview;
     private bool _isSelectedScreen = true;
-    private int _renderedParentGridSize = -1;
-    private double _renderedCanvasWidth;
-    private double _renderedCanvasHeight;
 
     public OverlayWindow()
     {
         InitializeComponent();
+        CreateFloatingCells();
         SourceInitialized += (_, _) => ConfigureNativeWindow();
     }
 
@@ -77,157 +85,161 @@ public partial class OverlayWindow : Window
             return;
         }
 
-        var display = _mappedDisplay;
+        if (_preview.IsScreenLevel)
+        {
+            RenderScreenLevel();
+            return;
+        }
+
+        RenderFloatingGrid();
+    }
+
+    private void RenderScreenLevel()
+    {
+        FloatingGridCanvas.Visibility = Visibility.Collapsed;
+        CursorMarker.Visibility = Visibility.Collapsed;
+        LevelLabelBorder.Visibility = Visibility.Collapsed;
+        ScreenBorder.Visibility = Visibility.Visible;
+        ScreenBorder.Opacity = _isSelectedScreen ? 1 : 0.24;
+        Canvas.SetLeft(ScreenBorder, 3);
+        Canvas.SetTop(ScreenBorder, 3);
+        ScreenBorder.Width = Math.Max(OverlayCanvas.ActualWidth - 6, 1);
+        ScreenBorder.Height = Math.Max(OverlayCanvas.ActualHeight - 6, 1);
+        ScreenLabel.Text = _preview!.Label;
+    }
+
+    private void RenderFloatingGrid()
+    {
+        var preview = _preview!;
+        var display = _mappedDisplay!;
         var scaleX = OverlayCanvas.ActualWidth / display.Bounds.Width;
         var scaleY = OverlayCanvas.ActualHeight / display.Bounds.Height;
-        var current = ToCanvasRect(
-            _preview.CurrentRegion,
-            display,
-            scaleX,
-            scaleY);
-        var selected = ToCanvasRect(
-            _preview.SelectedRegion,
-            display,
-            scaleX,
-            scaleY);
+        var cursorX =
+            (preview.ActualCursor.X - display.Bounds.Left) * scaleX;
+        var cursorY =
+            (preview.ActualCursor.Y - display.Bounds.Top) * scaleY;
+        var gridSize = Math.Max(preview.GridSize, 1);
+        var currentColumn = Math.Clamp(
+            (int)Math.Floor(cursorX / OverlayCanvas.ActualWidth * gridSize),
+            0,
+            gridSize - 1);
+        var currentRow = Math.Clamp(
+            (int)Math.Floor(cursorY / OverlayCanvas.ActualHeight * gridSize),
+            0,
+            gridSize - 1);
+        var nominalCellWidth = OverlayCanvas.ActualWidth / gridSize;
+        var nominalCellHeight = OverlayCanvas.ActualHeight / gridSize;
 
-        var isScreenLevel = _preview.IsScreenLevel;
-        CurrentRegionBorder.Visibility =
-            isScreenLevel ? Visibility.Collapsed : Visibility.Visible;
-        CurrentRegionBorder.Opacity = 0.48;
-        SelectionBorder.Visibility = Visibility.Visible;
-        SelectionBorder.Opacity =
-            isScreenLevel && !_isSelectedScreen ? 0.28 : 1;
+        ScreenBorder.Visibility = Visibility.Collapsed;
+        FloatingGridCanvas.Visibility = Visibility.Visible;
+        FloatingGridCanvas.Width = OverlayCanvas.ActualWidth;
+        FloatingGridCanvas.Height = OverlayCanvas.ActualHeight;
 
-        PositionBorder(CurrentRegionBorder, current, inset: 2);
-        PositionBorder(SelectionBorder, selected, inset: 3);
-        SelectionBorder.CornerRadius = new CornerRadius(
-            Math.Min(10, Math.Min(selected.Width, selected.Height) / 10));
-
-        RenderParentGrid(_preview);
-
-        var oneThirdX = current.Left + current.Width / 3;
-        var twoThirdsX = current.Left + current.Width * 2 / 3;
-        var oneThirdY = current.Top + current.Height / 3;
-        var twoThirdsY = current.Top + current.Height * 2 / 3;
-        SetVerticalLine(VerticalLine1, oneThirdX, current.Top, current.Bottom);
-        SetVerticalLine(VerticalLine2, twoThirdsX, current.Top, current.Bottom);
-        SetHorizontalLine(HorizontalLine1, oneThirdY, current.Left, current.Right);
-        SetHorizontalLine(HorizontalLine2, twoThirdsY, current.Left, current.Right);
-        var childGridVisibility =
-            isScreenLevel ? Visibility.Collapsed : Visibility.Visible;
-        VerticalLine1.Visibility = childGridVisibility;
-        VerticalLine2.Visibility = childGridVisibility;
-        HorizontalLine1.Visibility = childGridVisibility;
-        HorizontalLine2.Visibility = childGridVisibility;
-
-        TargetLabel.Text = _preview.Label;
-        TargetLabel.Visibility =
-            isScreenLevel
-            || selected.Width >= 135 && selected.Height >= 60
-                ? Visibility.Visible
-                : Visibility.Collapsed;
-    }
-
-    private void RenderParentGrid(NineGridPreview preview)
-    {
-        var parentGridSize = preview.Depth <= 1
-            ? 0
-            : preview.GridSize / 3;
-        if (parentGridSize <= 1)
+        foreach (var (row, column, cell) in _floatingCells)
         {
-            ParentGridCanvas.Visibility = Visibility.Collapsed;
-            return;
-        }
-
-        ParentGridCanvas.Visibility = Visibility.Visible;
-        var width = OverlayCanvas.ActualWidth;
-        var height = OverlayCanvas.ActualHeight;
-        if (
-            parentGridSize == _renderedParentGridSize
-            && Math.Abs(width - _renderedCanvasWidth) < 0.5
-            && Math.Abs(height - _renderedCanvasHeight) < 0.5
-        )
-        {
-            return;
-        }
-
-        _renderedParentGridSize = parentGridSize;
-        _renderedCanvasWidth = width;
-        _renderedCanvasHeight = height;
-        ParentGridCanvas.Children.Clear();
-        ParentGridCanvas.Width = width;
-        ParentGridCanvas.Height = height;
-
-        for (var index = 1; index < parentGridSize; index++)
-        {
-            var x = width * index / parentGridSize;
-            ParentGridCanvas.Children.Add(new System.Windows.Shapes.Line
+            var globalRow = currentRow + row;
+            var globalColumn = currentColumn + column;
+            if (
+                globalRow < 0
+                || globalRow >= gridSize
+                || globalColumn < 0
+                || globalColumn >= gridSize
+            )
             {
-                X1 = x,
-                X2 = x,
-                Y1 = 0,
-                Y2 = height,
-                Stroke = System.Windows.Media.Brushes.White,
-                StrokeThickness = 1
-            });
+                cell.Visibility = Visibility.Collapsed;
+                continue;
+            }
 
-            var y = height * index / parentGridSize;
-            ParentGridCanvas.Children.Add(new System.Windows.Shapes.Line
+            cell.Visibility = Visibility.Visible;
+            var left =
+                OverlayCanvas.ActualWidth * globalColumn / gridSize;
+            var right =
+                OverlayCanvas.ActualWidth * (globalColumn + 1) / gridSize;
+            var top =
+                OverlayCanvas.ActualHeight * globalRow / gridSize;
+            var bottom =
+                OverlayCanvas.ActualHeight * (globalRow + 1) / gridSize;
+            var cellWidth = Math.Max(right - left, 2);
+            var cellHeight = Math.Max(bottom - top, 2);
+            var isCurrent = row == 0 && column == 0;
+
+            Canvas.SetLeft(cell, left);
+            Canvas.SetTop(cell, top);
+            cell.Width = cellWidth;
+            cell.Height = cellHeight;
+            cell.CornerRadius = new CornerRadius(
+                Math.Min(8, Math.Min(cellWidth, cellHeight) / 8));
+            cell.Background = isCurrent
+                ? _accentBrush
+                : Math.Max(Math.Abs(row), Math.Abs(column)) <= 1
+                    ? _softAccentBrush
+                    : _transparentBrush;
+            cell.BorderThickness = new Thickness(isCurrent ? 3 : 1);
+            var normalizedDistance = Math.Sqrt(
+                Math.Pow(
+                    ((left + right) / 2 - cursorX)
+                    / Math.Max(nominalCellWidth, 1),
+                    2)
+                + Math.Pow(
+                    ((top + bottom) / 2 - cursorY)
+                    / Math.Max(nominalCellHeight, 1),
+                    2));
+            cell.Opacity = CellOpacity(normalizedDistance, isCurrent);
+        }
+
+        CursorMarker.Visibility = Visibility.Visible;
+        Canvas.SetLeft(CursorMarker, cursorX - CursorMarker.Width / 2);
+        Canvas.SetTop(CursorMarker, cursorY - CursorMarker.Height / 2);
+
+        LevelLabelBorder.Visibility = Visibility.Visible;
+        LevelLabel.Text = preview.Label;
+        Canvas.SetLeft(
+            LevelLabelBorder,
+            Math.Clamp(cursorX + 10, 4, Math.Max(4, OverlayCanvas.ActualWidth - 80)));
+        Canvas.SetTop(
+            LevelLabelBorder,
+            Math.Clamp(cursorY + 10, 4, Math.Max(4, OverlayCanvas.ActualHeight - 28)));
+    }
+
+    private void CreateFloatingCells()
+    {
+        for (var row = -VisibleRingCount; row <= VisibleRingCount; row++)
+        {
+            for (var column = -VisibleRingCount; column <= VisibleRingCount; column++)
             {
-                X1 = 0,
-                X2 = width,
-                Y1 = y,
-                Y2 = y,
-                Stroke = System.Windows.Media.Brushes.White,
-                StrokeThickness = 1
-            });
+                var ring = Math.Max(Math.Abs(row), Math.Abs(column));
+                var isCenter = row == 0 && column == 0;
+                var cell = new Border
+                {
+                    Background = isCenter
+                        ? _accentBrush
+                        : ring <= 1
+                            ? _softAccentBrush
+                            : _transparentBrush,
+                    BorderBrush = System.Windows.Media.Brushes.White,
+                    BorderThickness = new Thickness(
+                        isCenter ? 3 : ring <= 1 ? 1.75 : 1),
+                    IsHitTestVisible = false
+                };
+                FloatingGridCanvas.Children.Add(cell);
+                _floatingCells.Add((row, column, cell));
+            }
         }
     }
 
-    private static Rect ToCanvasRect(
-        System.Drawing.Rectangle region,
-        DisplayMonitor display,
-        double scaleX,
-        double scaleY)
+    private static double CellOpacity(
+        double normalizedDistance,
+        bool isCurrent)
     {
-        return new Rect(
-            (region.Left - display.Bounds.Left) * scaleX,
-            (region.Top - display.Bounds.Top) * scaleY,
-            Math.Max(region.Width * scaleX, 3),
-            Math.Max(region.Height * scaleY, 3));
-    }
+        if (isCurrent)
+        {
+            return 1;
+        }
 
-    private static void PositionBorder(Border border, Rect rectangle, double inset)
-    {
-        Canvas.SetLeft(border, rectangle.Left + inset);
-        Canvas.SetTop(border, rectangle.Top + inset);
-        border.Width = Math.Max(rectangle.Width - inset * 2, 1);
-        border.Height = Math.Max(rectangle.Height - inset * 2, 1);
-    }
-
-    private static void SetVerticalLine(
-        System.Windows.Shapes.Line line,
-        double x,
-        double top,
-        double bottom)
-    {
-        line.X1 = x;
-        line.X2 = x;
-        line.Y1 = top;
-        line.Y2 = bottom;
-    }
-
-    private static void SetHorizontalLine(
-        System.Windows.Shapes.Line line,
-        double y,
-        double left,
-        double right)
-    {
-        line.X1 = left;
-        line.X2 = right;
-        line.Y1 = y;
-        line.Y2 = y;
+        return Math.Clamp(
+            0.92 * Math.Exp(-0.58 * Math.Max(0, normalizedDistance - 0.5)),
+            0.06,
+            0.82);
     }
 
     private void EnsureNativeWindow()

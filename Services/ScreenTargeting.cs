@@ -13,21 +13,17 @@ public sealed record DisplayMonitor(
 
 public sealed record NineGridPreview(
     DisplayMonitor Display,
-    Rectangle CurrentRegion,
-    Rectangle SelectedRegion,
     Point ActualCursor,
     int Depth,
     int GridSize,
-    int GlobalRow,
-    int GlobalColumn,
-    int SelectedRow,
-    int SelectedColumn)
+    double StepX,
+    double StepY)
 {
     public bool IsScreenLevel => Depth == 0;
 
     public string Label => IsScreenLevel
         ? $"SCREEN {Display.Number}"
-        : $"LEVEL {Depth}  ·  CELL {GlobalRow + 1},{GlobalColumn + 1}";
+        : $"LEVEL {Depth}";
 }
 
 public sealed record GridInteraction(
@@ -40,8 +36,6 @@ public sealed class NineGridSession
     private Point _movementAnchor;
     private long _blockedUntil;
     private int _depth;
-    private int _globalRow;
-    private int _globalColumn;
 
     public NineGridSession(
         Point origin,
@@ -65,10 +59,8 @@ public sealed class NineGridSession
     public DisplayMonitor Display { get; private set; }
     public int Depth => _depth;
     public int GridSize => GridSizeAtDepth(Depth);
-    public int GlobalRow => _globalRow;
-    public int GlobalColumn => _globalColumn;
-    public int SelectedRow => Depth == 0 ? 0 : _globalRow % 3;
-    public int SelectedColumn => Depth == 0 ? 0 : _globalColumn % 3;
+    public double StepX => Display.Bounds.Width / (double)GridSize;
+    public double StepY => Display.Bounds.Height / (double)GridSize;
     public NineGridPreview Preview { get; private set; }
 
     public GridInteraction Move(
@@ -88,11 +80,7 @@ public sealed class NineGridSession
 
         var dx = actualPosition.X - _movementAnchor.X;
         var dy = actualPosition.Y - _movementAnchor.Y;
-        var (rowDelta, columnDelta) = Direction(
-            dx,
-            dy,
-            selectionDistance);
-        if (rowDelta == 0 && columnDelta == 0)
+        if (!ClearsThreshold(dx, dy, selectionDistance))
         {
             Preview = CreatePreview();
             return new GridInteraction(Preview, null);
@@ -100,9 +88,7 @@ public sealed class NineGridSession
 
         if (Depth == 0)
         {
-            var targetDisplay = FindDirectionalDisplay(
-                rowDelta,
-                columnDelta);
+            var targetDisplay = FindDirectionalDisplay(dx, dy);
             if (targetDisplay is null)
             {
                 _movementAnchor = actualPosition;
@@ -119,21 +105,21 @@ public sealed class NineGridSession
             return new GridInteraction(Preview, screenTarget);
         }
 
-        var row = Math.Clamp(_globalRow + rowDelta, 0, GridSize - 1);
-        var column = Math.Clamp(
-            _globalColumn + columnDelta,
-            0,
-            GridSize - 1);
-        if (row == _globalRow && column == _globalColumn)
+        var (rowDelta, columnDelta) = Direction(
+            dx,
+            dy,
+            selectionDistance);
+        var target = FixedGridTarget(
+            _movementAnchor,
+            rowDelta,
+            columnDelta);
+        if (target == _movementAnchor)
         {
             _movementAnchor = actualPosition;
             Preview = CreatePreview();
             return new GridInteraction(Preview, null);
         }
 
-        _globalRow = row;
-        _globalColumn = column;
-        var target = Center(SelectedCell());
         CurrentPosition = target;
         _movementAnchor = target;
         _blockedUntil = now + ToStopwatchTicks(cooldown);
@@ -144,6 +130,7 @@ public sealed class NineGridSession
     public GridInteraction ZoomIn(
         int maximumDepth,
         TimeSpan cooldown,
+        Point? actualPosition = null,
         long? nowTicks = null)
     {
         if (Depth >= maximumDepth)
@@ -151,7 +138,7 @@ public sealed class NineGridSession
             return new GridInteraction(Preview, null);
         }
 
-        var nextGridSize = checked(GridSize * 3);
+        var nextGridSize = Math.Pow(3, Depth + 1);
         if (
             Display.Bounds.Width < nextGridSize
             || Display.Bounds.Height < nextGridSize
@@ -160,17 +147,16 @@ public sealed class NineGridSession
             return new GridInteraction(Preview, null);
         }
 
-        _globalRow = Depth == 0 ? 1 : _globalRow * 3 + 1;
-        _globalColumn = Depth == 0 ? 1 : _globalColumn * 3 + 1;
         _depth++;
-        var target = Center(SelectedCell());
-        Reanchor(target, cooldown, nowTicks);
+        var position = actualPosition ?? CurrentPosition;
+        Reanchor(position, cooldown, nowTicks);
         Preview = CreatePreview();
-        return new GridInteraction(Preview, target);
+        return new GridInteraction(Preview, null);
     }
 
     public GridInteraction ZoomOut(
         TimeSpan cooldown,
+        Point? actualPosition = null,
         long? nowTicks = null)
     {
         if (Depth == 0)
@@ -179,14 +165,10 @@ public sealed class NineGridSession
         }
 
         _depth--;
-        _globalRow = Depth == 0 ? 0 : _globalRow / 3;
-        _globalColumn = Depth == 0 ? 0 : _globalColumn / 3;
-        var target = Depth == 0
-            ? CurrentPosition
-            : Center(SelectedCell());
-        Reanchor(target, cooldown, nowTicks);
+        var position = actualPosition ?? CurrentPosition;
+        Reanchor(position, cooldown, nowTicks);
         Preview = CreatePreview();
-        return new GridInteraction(Preview, target);
+        return new GridInteraction(Preview, null);
     }
 
     public void AcceptProgrammaticPosition(
@@ -196,6 +178,75 @@ public sealed class NineGridSession
     {
         Reanchor(actualPosition, cooldown, nowTicks);
         Preview = CreatePreview();
+    }
+
+    public static (int RowDelta, int ColumnDelta) Direction(
+        double dx,
+        double dy,
+        double selectionDistance)
+    {
+        if (!ClearsThreshold(dx, dy, selectionDistance))
+        {
+            return (0, 0);
+        }
+
+        var angle = Math.Atan2(dy, dx);
+        var octant = (int)Math.Round(
+            angle / (Math.PI / 4),
+            MidpointRounding.AwayFromZero);
+        octant = ((octant % 8) + 8) % 8;
+        return octant switch
+        {
+            0 => (0, 1),
+            1 => (1, 1),
+            2 => (1, 0),
+            3 => (1, -1),
+            4 => (0, -1),
+            5 => (-1, -1),
+            6 => (-1, 0),
+            _ => (-1, 1)
+        };
+    }
+
+    private static bool ClearsThreshold(
+        double dx,
+        double dy,
+        double selectionDistance)
+    {
+        return dx * dx + dy * dy
+            >= selectionDistance * selectionDistance;
+    }
+
+    private Point FixedGridTarget(
+        Point anchor,
+        int rowDelta,
+        int columnDelta)
+    {
+        var (currentRow, currentColumn) = FindGridCell(
+            Display.Bounds,
+            GridSize,
+            anchor);
+        var targetRow = Math.Clamp(
+            currentRow + rowDelta,
+            0,
+            GridSize - 1);
+        var targetColumn = Math.Clamp(
+            currentColumn + columnDelta,
+            0,
+            GridSize - 1);
+        if (
+            targetRow == currentRow
+            && targetColumn == currentColumn
+        )
+        {
+            return anchor;
+        }
+
+        return Center(GridCell(
+            Display.Bounds,
+            GridSize,
+            targetRow,
+            targetColumn));
     }
 
     private void Reanchor(
@@ -211,48 +262,13 @@ public sealed class NineGridSession
 
     private NineGridPreview CreatePreview()
     {
-        var gridSize = GridSize;
-        var currentRegion = Depth switch
-        {
-            0 => Display.Bounds,
-            1 => Display.Bounds,
-            _ => GridCell(
-                Display.Bounds,
-                gridSize / 3,
-                _globalRow / 3,
-                _globalColumn / 3)
-        };
-        var selectedRegion = Depth == 0
-            ? Display.Bounds
-            : SelectedCell();
-
         return new NineGridPreview(
             Display,
-            currentRegion,
-            selectedRegion,
             CurrentPosition,
             Depth,
-            gridSize,
-            _globalRow,
-            _globalColumn,
-            SelectedRow,
-            SelectedColumn);
-    }
-
-    private Rectangle SelectedCell()
-    {
-        return Depth == 0
-            ? Display.Bounds
-            : GridCell(
-                Display.Bounds,
-                GridSize,
-                _globalRow,
-                _globalColumn);
-    }
-
-    public static Rectangle Cell(Rectangle region, int row, int column)
-    {
-        return GridCell(region, 3, row, column);
+            GridSize,
+            StepX,
+            StepY);
     }
 
     public static Rectangle GridCell(
@@ -271,36 +287,19 @@ public sealed class NineGridSession
         return Rectangle.FromLTRB(left, top, right, bottom);
     }
 
-    public static (int RowDelta, int ColumnDelta) Direction(
-        double dx,
-        double dy,
-        double selectionDistance)
+    public static (int Row, int Column) FindGridCell(
+        Rectangle region,
+        int gridSize,
+        Point position)
     {
-        if (
-            dx * dx + dy * dy
-            < selectionDistance * selectionDistance
-        )
-        {
-            return (0, 0);
-        }
-
-        var absX = Math.Abs(dx);
-        var absY = Math.Abs(dy);
-
-        // Cardinal directions deliberately have a narrower cone than
-        // diagonals. This makes the four corner cells easy to acquire while
-        // still allowing a clearly horizontal or vertical gesture.
-        const double cardinalCone = 0.32;
-        if (absY <= absX * cardinalCone)
-        {
-            return (0, Math.Sign(dx));
-        }
-        if (absX <= absY * cardinalCone)
-        {
-            return (Math.Sign(dy), 0);
-        }
-
-        return (Math.Sign(dy), Math.Sign(dx));
+        gridSize = Math.Max(gridSize, 1);
+        var relativeX =
+            (position.X - region.Left) / (double)Math.Max(region.Width, 1);
+        var relativeY =
+            (position.Y - region.Top) / (double)Math.Max(region.Height, 1);
+        return (
+            Math.Clamp((int)Math.Floor(relativeY * gridSize), 0, gridSize - 1),
+            Math.Clamp((int)Math.Floor(relativeX * gridSize), 0, gridSize - 1));
     }
 
     private static int GridSizeAtDepth(int depth)
@@ -313,16 +312,56 @@ public sealed class NineGridSession
         return size;
     }
 
-    private static Point Center(Rectangle region)
+    private DisplayMonitor? FindDirectionalDisplay(double dx, double dy)
     {
-        return new Point(
-            region.Left + region.Width / 2,
-            region.Top + region.Height / 2);
-    }
+        var gestureLength = Math.Sqrt(dx * dx + dy * dy);
+        if (gestureLength <= 0)
+        {
+            return null;
+        }
 
-    private static long ToStopwatchTicks(TimeSpan duration)
-    {
-        return (long)Math.Round(duration.TotalSeconds * Stopwatch.Frequency);
+        var currentCenter = Center(Display.Bounds);
+        var candidates = _displays
+            .Where(candidate => candidate.DeviceName != Display.DeviceName)
+            .Select(candidate =>
+            {
+                var candidateCenter = Center(candidate.Bounds);
+                var candidateX = candidateCenter.X - currentCenter.X;
+                var candidateY = candidateCenter.Y - currentCenter.Y;
+                var candidateLength = Math.Sqrt(
+                    candidateX * candidateX + candidateY * candidateY);
+                var cosine = candidateLength <= 0
+                    ? -1
+                    : (dx * candidateX + dy * candidateY)
+                        / (gestureLength * candidateLength);
+                return new
+                {
+                    Display = candidate,
+                    Cosine = cosine,
+                    DistanceSquared =
+                        (long)candidateX * candidateX
+                        + (long)candidateY * candidateY
+                };
+            })
+            .Where(candidate => candidate.Cosine > 0)
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            return null;
+        }
+
+        // Treat monitors within a small angular band as being in the same
+        // intended direction, then choose the nearest. This prevents a far
+        // monitor with a marginally better center angle from hiding a middle
+        // monitor in an uneven physical layout.
+        var bestCosine = candidates.Max(candidate => candidate.Cosine);
+        const double angularScoreTolerance = 0.12;
+        return candidates
+            .Where(candidate =>
+                candidate.Cosine >= bestCosine - angularScoreTolerance)
+            .OrderBy(candidate => candidate.DistanceSquared)
+            .Select(candidate => candidate.Display)
+            .FirstOrDefault();
     }
 
     private DisplayMonitor FindDisplay(Point point)
@@ -342,39 +381,21 @@ public sealed class NineGridSession
                         display.Bounds.Bottom - 1);
                     var dx = point.X - x;
                     var dy = point.Y - y;
-                    return dx * dx + dy * dy;
+                    return (long)dx * dx + (long)dy * dy;
                 })
                 .First();
     }
 
-    private DisplayMonitor? FindDirectionalDisplay(
-        int rowDelta,
-        int columnDelta)
+    private static Point Center(Rectangle region)
     {
-        var currentCenter = Center(Display.Bounds);
-        return _displays
-            .Where(candidate => candidate.DeviceName != Display.DeviceName)
-            .Select(candidate =>
-            {
-                var candidateCenter = Center(candidate.Bounds);
-                var dx = candidateCenter.X - currentCenter.X;
-                var dy = candidateCenter.Y - currentCenter.Y;
-                var direction = Direction(dx, dy, selectionDistance: 0);
-                var distanceSquared =
-                    (long)dx * dx + (long)dy * dy;
-                return new
-                {
-                    Display = candidate,
-                    Direction = direction,
-                    DistanceSquared = distanceSquared
-                };
-            })
-            .Where(candidate =>
-                candidate.Direction
-                    == (RowDelta: rowDelta, ColumnDelta: columnDelta))
-            .OrderBy(candidate => candidate.DistanceSquared)
-            .Select(candidate => candidate.Display)
-            .FirstOrDefault();
+        return new Point(
+            region.Left + region.Width / 2,
+            region.Top + region.Height / 2);
+    }
+
+    private static long ToStopwatchTicks(TimeSpan duration)
+    {
+        return (long)Math.Round(duration.TotalSeconds * Stopwatch.Frequency);
     }
 
     public static IReadOnlyList<DisplayMonitor> GetDisplays()

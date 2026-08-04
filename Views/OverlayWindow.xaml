@@ -9,55 +9,46 @@
         ShowActivated="False"
         Focusable="False"
         Topmost="True">
-    <Grid Background="#26000000" IsHitTestVisible="False">
+    <Grid Background="#18000000" IsHitTestVisible="False">
         <Canvas x:Name="OverlayCanvas"
                 ClipToBounds="True"
                 SizeChanged="OverlayCanvas_SizeChanged">
-            <Canvas x:Name="ParentGridCanvas"
-                    Opacity="0.24"
+            <Canvas x:Name="FloatingGridCanvas"
                     IsHitTestVisible="False"/>
 
-            <Border x:Name="CurrentRegionBorder"
-                    Background="#1017B6A4"
-                    BorderBrush="#D018C3AF"
-                    BorderThickness="3"
-                    CornerRadius="12"/>
-
-            <Border x:Name="SelectionBorder"
-                    Background="#5217B6A4"
-                    BorderBrush="#FFFFFFFF"
+            <Border x:Name="ScreenBorder"
+                    Background="#2817B6A4"
+                    BorderBrush="White"
                     BorderThickness="4"
-                    CornerRadius="10">
-                <Border.Effect>
-                    <DropShadowEffect BlurRadius="18"
-                                      ShadowDepth="0"
-                                      Color="#9017B6A4"/>
-                </Border.Effect>
-                <TextBlock x:Name="TargetLabel"
-                           Text="LEVEL 0 · CELL 2,2"
+                    CornerRadius="12">
+                <TextBlock x:Name="ScreenLabel"
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center"
                            Foreground="White"
                            FontFamily="Segoe UI Variable, Segoe UI"
                            FontWeight="SemiBold"
-                           FontSize="15"
-                           TextAlignment="Center"
-                           TextWrapping="Wrap"
-                           Margin="10"/>
+                           FontSize="18"/>
             </Border>
 
-            <Line x:Name="VerticalLine1"
-                  Stroke="#D8FFFFFF"
-                  StrokeThickness="2"/>
-            <Line x:Name="VerticalLine2"
-                  Stroke="#D8FFFFFF"
-                  StrokeThickness="2"/>
-            <Line x:Name="HorizontalLine1"
-                  Stroke="#D8FFFFFF"
-                  StrokeThickness="2"/>
-            <Line x:Name="HorizontalLine2"
-                  Stroke="#D8FFFFFF"
-                  StrokeThickness="2"/>
+            <Ellipse x:Name="CursorMarker"
+                     Width="11"
+                     Height="11"
+                     Fill="#F017B6A4"
+                     Stroke="White"
+                     StrokeThickness="2"/>
+
+            <Border x:Name="LevelLabelBorder"
+                    Background="#D9162422"
+                    BorderBrush="#9017B6A4"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="7,3">
+                <TextBlock x:Name="LevelLabel"
+                           Foreground="White"
+                           FontFamily="Segoe UI Variable, Segoe UI"
+                           FontWeight="SemiBold"
+                           FontSize="11"/>
+            </Border>
         </Canvas>
     </Grid>
 </Window>

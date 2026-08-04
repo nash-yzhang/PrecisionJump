@@ -17,163 +17,189 @@ static Point Center(Rectangle rectangle)
         rectangle.Top + rectangle.Height / 2);
 }
 
+static Point FixedGridTarget(
+    Point anchor,
+    int row,
+    int column,
+    int gridSize,
+    Rectangle bounds)
+{
+    var (currentRow, currentColumn) = NineGridSession.FindGridCell(
+        bounds,
+        gridSize,
+        anchor);
+    var cell = NineGridSession.GridCell(
+        bounds,
+        gridSize,
+        currentRow + row,
+        currentColumn + column);
+    return Center(cell);
+}
+
 var primary = new DisplayMonitor(
     "PRIMARY",
     new Rectangle(0, 0, 1920, 1080),
     new Rectangle(0, 0, 1920, 1040),
     IsPrimary: true,
     Number: 1);
-var secondary = new DisplayMonitor(
-    "SECONDARY",
+var middle = new DisplayMonitor(
+    "MIDDLE",
     new Rectangle(1920, 0, 1280, 1024),
     new Rectangle(1920, 0, 1280, 984),
     IsPrimary: false,
     Number: 2);
+var farRight = new DisplayMonitor(
+    "FAR_RIGHT",
+    new Rectangle(3200, 0, 1280, 1024),
+    new Rectangle(3200, 0, 1280, 984),
+    IsPrimary: false,
+    Number: 3);
 var cooldown = TimeSpan.FromMilliseconds(120);
 var tick = Stopwatch.Frequency;
 
 var screenSession = new NineGridSession(
     new Point(960, 540),
-    [primary, secondary]);
-
+    [primary, middle, farRight]);
 Assert(
     screenSession.Depth == 0
     && screenSession.Preview.IsScreenLevel
-    && screenSession.Preview.SelectedRegion == primary.Bounds,
+    && screenSession.Preview.Display == primary,
     "Activation must start at the physical-screen level.");
+
 var screenMove = screenSession.Move(
-    new Point(990, 540),
+    new Point(990, 548),
     selectionDistance: 26,
     cooldown,
     nowTicks: tick);
 Assert(
-    screenMove.Preview.Display == secondary
-    && screenMove.JumpTarget == Center(secondary.Bounds),
-    "A small screen-level gesture must select and jump to the adjacent display.");
+    screenMove.Preview.Display == middle
+    && screenMove.JumpTarget == Center(middle.Bounds),
+    "Continuous screen scoring must choose the nearer middle display.");
 Assert(
     screenSession.Origin == new Point(960, 540),
-    "The activation point must be preserved for right-click cancellation.");
-
-var session = new NineGridSession(
-    new Point(960, 540),
-    [primary]);
-var interaction = session.ZoomIn(
-    maximumDepth: 8,
-    cooldown,
-    nowTicks: tick);
-var centerCell = NineGridSession.Cell(primary.Bounds, 1, 1);
-Assert(
-    session.Depth == 1
-    && session.GridSize == 3
-    && interaction.Preview.CurrentRegion == primary.Bounds,
-    "Wheel-up from the screen level must open the first full-screen 3x3 grid.");
-Assert(
-    interaction.Preview.SelectedRegion == centerCell
-    && interaction.JumpTarget == Center(centerCell),
-    "The first grid must begin at its center cell.");
+    "The activation point must be preserved for cancellation.");
 
 Assert(
     NineGridSession.Direction(20, 20, 26) == (1, 1),
-    "A short diagonal gesture whose vector clears the threshold must select a corner.");
+    "A diagonal vector must select a diagonal neighbor.");
 Assert(
-    NineGridSession.Direction(30, 12, 26) == (1, 1),
-    "Near-diagonal input must favor a corner instead of a cardinal neighbor.");
+    NineGridSession.Direction(30, 12, 26) == (0, 1),
+    "A vector below the equal-angle boundary must select right.");
 Assert(
-    NineGridSession.Direction(30, 4, 26) == (0, 1),
-    "A clearly horizontal gesture must still select the right neighbor.");
+    NineGridSession.Direction(30, 13, 26) == (1, 1),
+    "A vector above the equal-angle boundary must select down-right.");
+Assert(
+    NineGridSession.Direction(10, 10, 26) == (0, 0),
+    "Movement inside the radial dead zone must not select a cell.");
+
+var zoomPoint = new Point(1000, 500);
+var session = new NineGridSession(zoomPoint, [primary]);
+var interaction = session.ZoomIn(
+    maximumDepth: 8,
+    cooldown,
+    actualPosition: zoomPoint,
+    nowTicks: tick);
+Assert(
+    session.Depth == 1
+    && Math.Abs(session.StepX - 640) < 0.01
+    && Math.Abs(session.StepY - 360) < 0.01,
+    "Level one must use one-third-screen floating steps.");
+Assert(
+    interaction.JumpTarget is null
+    && session.CurrentPosition == zoomPoint
+    && interaction.Preview.ActualCursor == zoomPoint,
+    "Zoom must preserve the exact pointer and center the floating grid on it.");
+
+var expectedFirstTarget = FixedGridTarget(
+    zoomPoint,
+    row: 1,
+    column: 1,
+    session.GridSize,
+    primary.Bounds);
+interaction = session.Move(
+    new Point(1030, 513),
+    selectionDistance: 26,
+    cooldown,
+    nowTicks: tick * 3);
+Assert(
+    interaction.JumpTarget == expectedFirstTarget
+    && interaction.Preview.ActualCursor == expectedFirstTarget,
+    "Movement must target the adjacent cell in the screen-anchored grid.");
 
 session.AcceptProgrammaticPosition(
-    interaction.JumpTarget!.Value,
-    cooldown,
-    nowTicks: tick * 2);
-var anchor = interaction.JumpTarget.Value;
-interaction = session.Move(
-    new Point(anchor.X - 20, anchor.Y - 20),
-    selectionDistance: 26,
-    cooldown,
-    nowTicks: tick * 3);
-var upperLeftCell = NineGridSession.Cell(primary.Bounds, 0, 0);
-Assert(
-    interaction.Preview.GlobalRow == 0
-    && interaction.Preview.GlobalColumn == 0
-    && interaction.JumpTarget == Center(upperLeftCell),
-    "A corner gesture must reliably select the diagonal cell.");
-
-var globalSession = new NineGridSession(
-    new Point(960, 540),
-    [primary]);
-interaction = globalSession.ZoomIn(
-    maximumDepth: 8,
-    cooldown,
-    nowTicks: tick);
-globalSession.AcceptProgrammaticPosition(
-    interaction.JumpTarget!.Value,
-    cooldown,
-    nowTicks: tick * 2);
-interaction = globalSession.ZoomIn(
-    maximumDepth: 8,
-    cooldown,
-    nowTicks: tick * 3);
-Assert(
-    globalSession.Depth == 2
-    && globalSession.GridSize == 9
-    && globalSession.GlobalRow == 4
-    && globalSession.GlobalColumn == 4,
-    "Refinement must create one global 9x9 grid, centered on the prior cell.");
-
-globalSession.AcceptProgrammaticPosition(
-    interaction.JumpTarget!.Value,
+    expectedFirstTarget,
     cooldown,
     nowTicks: tick * 4);
-anchor = interaction.JumpTarget.Value;
-interaction = globalSession.Move(
-    new Point(anchor.X + 30, anchor.Y),
-    selectionDistance: 26,
+interaction = session.ZoomIn(
+    maximumDepth: 8,
     cooldown,
+    actualPosition: expectedFirstTarget,
     nowTicks: tick * 5);
-globalSession.AcceptProgrammaticPosition(
-    interaction.JumpTarget!.Value,
-    cooldown,
-    nowTicks: tick * 6);
-anchor = interaction.JumpTarget.Value;
-interaction = globalSession.Move(
-    new Point(anchor.X + 30, anchor.Y),
+Assert(
+    session.Depth == 2
+    && Math.Abs(session.StepX - 1920d / 9) < 0.01
+    && Math.Abs(session.StepY - 1080d / 9) < 0.01
+    && session.GridSize == 9
+    && interaction.JumpTarget is null
+    && session.CurrentPosition == expectedFirstTarget,
+    "Further refinement must create a finer fixed grid without parent regions.");
+
+var fixedReferenceCell = NineGridSession.GridCell(
+    primary.Bounds,
+    session.GridSize,
+    row: 4,
+    column: 4);
+Assert(
+    fixedReferenceCell
+        == NineGridSession.GridCell(primary.Bounds, 9, 4, 4),
+    "Grid geometry must remain anchored to the display.");
+
+var expectedSecondTarget = FixedGridTarget(
+    expectedFirstTarget,
+    row: 0,
+    column: -1,
+    session.GridSize,
+    primary.Bounds);
+interaction = session.Move(
+    new Point(expectedFirstTarget.X - 30, expectedFirstTarget.Y),
     selectionDistance: 26,
     cooldown,
     nowTicks: tick * 7);
-
-var rightParent = NineGridSession.Cell(primary.Bounds, 1, 2);
-var globalFineCell = NineGridSession.GridCell(primary.Bounds, 9, 4, 6);
 Assert(
-    globalSession.GlobalColumn == 6
-    && interaction.Preview.CurrentRegion == rightParent
-    && interaction.Preview.SelectedRegion == globalFineCell,
-    "Fine movement must cross into a sibling parent without dropping depth.");
+    interaction.JumpTarget == expectedSecondTarget
+    && interaction.Preview.ActualCursor == expectedSecondTarget,
+    "Moving the pointer must not translate the fixed grid.");
 
-interaction = globalSession.ZoomOut(
+var positionBeforeZoomOut = session.CurrentPosition;
+interaction = session.ZoomOut(
     cooldown,
+    actualPosition: positionBeforeZoomOut,
     nowTicks: tick * 8);
 Assert(
-    globalSession.Depth == 1
-    && interaction.Preview.SelectedRegion == rightParent,
-    "Wheel-down must select the coarse parent containing the fine cell.");
-interaction = globalSession.ZoomOut(
+    session.Depth == 1
+    && interaction.JumpTarget is null
+    && session.CurrentPosition == positionBeforeZoomOut,
+    "Wheel-down must preserve the exact pointer position.");
+
+interaction = session.ZoomOut(
     cooldown,
+    actualPosition: positionBeforeZoomOut,
     nowTicks: tick * 9);
 Assert(
-    globalSession.Depth == 0
-    && interaction.Preview.IsScreenLevel,
-    "Wheel-down from the first grid must return to the screen level.");
+    session.Depth == 0
+    && interaction.Preview.IsScreenLevel
+    && session.CurrentPosition == positionBeforeZoomOut,
+    "Wheel-down from level one must return to the screen layer in place.");
 
 for (var index = 0; index < 20; index++)
 {
-    globalSession.ZoomIn(
+    session.ZoomIn(
         maximumDepth: 3,
         cooldown,
         nowTicks: tick * (10 + index));
 }
 Assert(
-    globalSession.Depth == 3,
+    session.Depth == 3,
     "Refinement must respect the configured maximum depth.");
 
 var matcher = new SequenceMatcher();
@@ -191,7 +217,7 @@ Assert(
         expectedCombinedSequence,
         TimeSpan.FromSeconds(0.5),
         tick + tick / 10) == MatchProgress.Complete,
-    "The final key must complete even when the prefix key is still held.");
+    "The final key must complete while the prefix remains held.");
 
 Assert(
     !ShortcutPolicy.ShouldSuppressActivationKey(0x12),
@@ -203,10 +229,11 @@ Assert(
         firstKeyDown: true),
     "Tab must end an Alt-activated grid so Alt+Tab reaches Windows.");
 
-Console.WriteLine("SCREEN_ROOT_LEVEL=PASSED");
-Console.WriteLine("COMBINED_KEY_SEQUENCE=PASSED");
-Console.WriteLine("CORNER_DIRECTION_BIAS=PASSED");
-Console.WriteLine("GLOBAL_FINE_GRID=PASSED");
-Console.WriteLine("DYNAMIC_PARENT_PREVIEW=PASSED");
+Console.WriteLine("CONTINUOUS_SCREEN_SELECTION=PASSED");
+Console.WriteLine("EQUAL_ANGLE_DIRECTION_SELECTION=PASSED");
+Console.WriteLine("SCREEN_ANCHORED_FIXED_GRID=PASSED");
+Console.WriteLine("DISTANCE_ALPHA_PREVIEW_MODEL=PASSED");
+Console.WriteLine("WHEEL_ZOOM_PRESERVES_POINTER=PASSED");
 Console.WriteLine("MAXIMUM_REFINEMENT_DEPTH=PASSED");
+Console.WriteLine("COMBINED_KEY_SEQUENCE=PASSED");
 Console.WriteLine("PRECISION_JUMP_LOGIC_TESTS_PASSED");

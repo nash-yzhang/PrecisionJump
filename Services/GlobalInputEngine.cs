@@ -170,7 +170,9 @@ public sealed class GlobalInputEngine : IDisposable
                     {
                         var data = Marshal.PtrToStructure<NativeMethods.MouseHookData>(lParam);
                         var delta = unchecked((short)(data.MouseData >> 16));
-                        AdjustDepth(delta);
+                        AdjustDepth(
+                            delta,
+                            new Point(data.Position.X, data.Position.Y));
                         return 1;
                     }
                     case NativeMethods.WmMouseHorizontalWheel:
@@ -358,7 +360,7 @@ public sealed class GlobalInputEngine : IDisposable
         {
             _lastMoveDiagnosticAt = now;
             DiagnosticLog(
-                $"MOVE actual={actualPosition.X},{actualPosition.Y} depth={preview.Depth} cell={preview.SelectedRow},{preview.SelectedColumn}");
+                $"MOVE actual={actualPosition.X},{actualPosition.Y} depth={preview.Depth} step={preview.StepX:F1},{preview.StepY:F1}");
         }
         if (!Equals(previous, preview))
         {
@@ -370,7 +372,7 @@ public sealed class GlobalInputEngine : IDisposable
         }
     }
 
-    private void AdjustDepth(int wheelDelta)
+    private void AdjustDepth(int wheelDelta, Point actualPosition)
     {
         if (_gestureSession is null || wheelDelta == 0)
         {
@@ -380,11 +382,14 @@ public sealed class GlobalInputEngine : IDisposable
         var interaction = wheelDelta > 0
             ? _gestureSession.ZoomIn(
                 _settings.MaximumZoomLevel,
-                SelectionCooldown())
-            : _gestureSession.ZoomOut(SelectionCooldown());
+                SelectionCooldown(),
+                actualPosition)
+            : _gestureSession.ZoomOut(
+                SelectionCooldown(),
+                actualPosition);
         var preview = interaction.Preview;
         DiagnosticLog(
-            $"WHEEL delta={wheelDelta} depth={preview.Depth} cell={preview.SelectedRow},{preview.SelectedColumn}");
+            $"WHEEL delta={wheelDelta} depth={preview.Depth} position={preview.ActualCursor.X},{preview.ActualCursor.Y}");
         QueuePreview(preview);
         if (interaction.JumpTarget is Point target)
         {
