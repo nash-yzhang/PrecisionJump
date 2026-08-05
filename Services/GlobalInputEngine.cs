@@ -19,13 +19,12 @@ public sealed class GlobalInputEngine : IDisposable
     private readonly HashSet<int> _heldKeys = [];
     private readonly HashSet<int> _suppressedShortcutKeys = [];
     private readonly ScreenOverlayMap _overlayMap;
+    private readonly DispatcherTimer _scaleAnimationTimer;
 
     private nint _keyboardHook;
     private nint _mouseHook;
     private NineGridSession? _gestureSession;
     private int? _screenJumpReleaseKey;
-    private Point? _programmaticTarget;
-    private bool _pointerJumpQueued;
     private bool _suppressLeftButtonUp;
     private bool _suppressRightButtonUp;
     private bool _suppressMiddleButtonUp;
@@ -43,6 +42,13 @@ public sealed class GlobalInputEngine : IDisposable
         _keyboardCallback = KeyboardHookCallback;
         _mouseCallback = MouseHookCallback;
         _overlayMap = new ScreenOverlayMap(dispatcher);
+        _scaleAnimationTimer = new DispatcherTimer(
+            DispatcherPriority.Render,
+            dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(16)
+        };
+        _scaleAnimationTimer.Tick += ScaleAnimationTimerOnTick;
         _settings.PropertyChanged += SettingsOnPropertyChanged;
     }
 
@@ -144,27 +150,31 @@ public sealed class GlobalInputEngine : IDisposable
                     case NativeMethods.WmMouseMove:
                     {
                         var data = Marshal.PtrToStructure<NativeMethods.MouseHookData>(lParam);
+                        if ((data.Flags & NativeMethods.LlmhfInjected) != 0)
+                        {
+                            return NativeMethods.CallNextHookEx(
+                                _mouseHook,
+                                code,
+                                wParam,
+                                lParam);
+                        }
+
                         var position = new Point(data.Position.X, data.Position.Y);
-                        if (
-                            _programmaticTarget is Point target
-                            && DistanceSquared(position, target) <= 9
-                        )
+                        var current = _gestureSession.CurrentPosition;
+                        var interaction = _gestureSession.MoveContinuous(
+                            position.X - current.X,
+                            position.Y - current.Y,
+                            _settings.SelectionDistance);
+                        if (interaction.JumpTarget is Point target)
                         {
-                            _gestureSession.AcceptProgrammaticPosition(
-                                target,
-                                SelectionCooldown());
-                            _programmaticTarget = null;
-                            QueuePreview(_gestureSession.Preview);
+                            SendAbsoluteMouseMove(target);
                         }
-                        else if (_programmaticTarget is null)
-                        {
-                            UpdateGesture(position);
-                        }
-                        return NativeMethods.CallNextHookEx(
-                            _mouseHook,
-                            code,
-                            wParam,
-                            lParam);
+                        QueuePreview(interaction.Preview);
+                        LogContinuousMove(
+                            position.X - current.X,
+                            position.Y - current.Y,
+                            interaction.Preview);
+                        return 1;
                     }
                     case NativeMethods.WmMouseWheel:
                     {
@@ -339,19 +349,11 @@ public sealed class GlobalInputEngine : IDisposable
         JumpStateChanged?.Invoke(true);
     }
 
-    private void UpdateGesture(Point actualPosition)
+    private void LogContinuousMove(
+        int deltaX,
+        int deltaY,
+        NineGridPreview preview)
     {
-        if (_gestureSession is null)
-        {
-            return;
-        }
-
-        var previous = _gestureSession.Preview;
-        var interaction = _gestureSession.Move(
-            actualPosition,
-            _settings.SelectionDistance,
-            SelectionCooldown());
-        var preview = interaction.Preview;
         var now = Stopwatch.GetTimestamp();
         if (
             (now - _lastMoveDiagnosticAt) / (double)Stopwatch.Frequency
@@ -360,15 +362,7 @@ public sealed class GlobalInputEngine : IDisposable
         {
             _lastMoveDiagnosticAt = now;
             DiagnosticLog(
-                $"MOVE actual={actualPosition.X},{actualPosition.Y} depth={preview.Depth} step={preview.StepX:F1},{preview.StepY:F1}");
-        }
-        if (!Equals(previous, preview))
-        {
-            QueuePreview(preview);
-        }
-        if (interaction.JumpTarget is Point target)
-        {
-            QueuePointerJump(target);
+                $"MOVE delta={deltaX},{deltaY} depth={preview.Depth} scale={preview.MapScale:F2} position={preview.ActualCursor.X},{preview.ActualCursor.Y}");
         }
     }
 
@@ -382,64 +376,31 @@ public sealed class GlobalInputEngine : IDisposable
         var interaction = wheelDelta > 0
             ? _gestureSession.ZoomIn(
                 _settings.MaximumZoomLevel,
-                SelectionCooldown(),
                 actualPosition)
             : _gestureSession.ZoomOut(
-                SelectionCooldown(),
                 actualPosition);
         var preview = interaction.Preview;
         DiagnosticLog(
-            $"WHEEL delta={wheelDelta} depth={preview.Depth} position={preview.ActualCursor.X},{preview.ActualCursor.Y}");
+            $"WHEEL delta={wheelDelta} depth={preview.Depth} scale={preview.MapScale:F2} position={preview.ActualCursor.X},{preview.ActualCursor.Y}");
         QueuePreview(preview);
-        if (interaction.JumpTarget is Point target)
-        {
-            QueuePointerJump(target);
-        }
+        _scaleAnimationTimer.Start();
     }
 
-    private TimeSpan SelectionCooldown()
+    private void ScaleAnimationTimerOnTick(
+        object? sender,
+        EventArgs e)
     {
-        return TimeSpan.FromMilliseconds(
-            _settings.SelectionCooldownMilliseconds);
-    }
-
-    private void QueuePointerJump(Point target)
-    {
-        _programmaticTarget = target;
-        if (_pointerJumpQueued)
+        if (_gestureSession is null)
         {
+            _scaleAnimationTimer.Stop();
             return;
         }
 
-        _pointerJumpQueued = true;
-        _dispatcher.BeginInvoke(
-            () =>
-            {
-                _pointerJumpQueued = false;
-                if (_gestureSession is null || _programmaticTarget is not Point next)
-                {
-                    return;
-                }
-
-                SendAbsoluteMouseMove(next);
-                _dispatcher.BeginInvoke(
-                    () =>
-                    {
-                        if (
-                            _gestureSession is not null
-                            && _programmaticTarget == next
-                        )
-                        {
-                            _gestureSession.AcceptProgrammaticPosition(
-                                next,
-                                SelectionCooldown());
-                            _programmaticTarget = null;
-                            QueuePreview(_gestureSession.Preview);
-                        }
-                    },
-                    DispatcherPriority.Background);
-            },
-            DispatcherPriority.Input);
+        QueuePreview(_gestureSession.RefreshScale());
+        if (!_gestureSession.IsScaleAnimating)
+        {
+            _scaleAnimationTimer.Stop();
+        }
     }
 
     private void QueuePreview(NineGridPreview preview)
@@ -474,16 +435,10 @@ public sealed class GlobalInputEngine : IDisposable
         }
 
         var preview = _gestureSession.Preview;
-        var pendingTarget = _programmaticTarget;
-        var destination = pendingTarget
-            ?? _gestureSession.CurrentPosition;
+        var destination = _gestureSession.CurrentPosition;
         DiagnosticLog(
             $"KEEP screen={preview.Display.Number} depth={preview.Depth} destination={destination.X},{destination.Y}");
         EndGesture();
-        if (pendingTarget is not null)
-        {
-            SendAbsoluteMouseMove(destination);
-        }
         ShowCompletion($"KEEP  ·  LEVEL {preview.Depth}");
     }
 
@@ -511,20 +466,12 @@ public sealed class GlobalInputEngine : IDisposable
     {
         _gestureSession = null;
         _screenJumpReleaseKey = null;
-        _programmaticTarget = null;
-        _pointerJumpQueued = false;
+        _scaleAnimationTimer.Stop();
         _queuedPreview = null;
         _dispatcher.BeginInvoke(
             _overlayMap.HideAll,
             DispatcherPriority.Render);
         JumpStateChanged?.Invoke(false);
-    }
-
-    private static long DistanceSquared(Point left, Point right)
-    {
-        var dx = left.X - right.X;
-        var dy = left.Y - right.Y;
-        return (long)dx * dx + (long)dy * dy;
     }
 
     private void ShowCompletion(string message, HudTone tone = HudTone.Active)

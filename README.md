@@ -1,34 +1,36 @@
 # Precision Jump
 
-Precision Jump is a lightweight Windows 11 tray utility for fast, precise
-mouse positioning with a fixed screen grid and pointer-focused visibility. It
-moves the real Windows pointer without changing mouse speed or acceleration.
+Precision Jump is a lightweight Windows 11 tray utility for continuous,
+zoomable pointer navigation across multiple displays. It applies its mapping
+only while active and does not change Windows mouse settings.
 
 ## How it works
 
 1. Hold the activation shortcut (backtick by default).
-2. At the screen level, make a small directional mouse gesture to select an
-   adjacent display.
-3. Scroll up to open a screen-anchored 3×3 grid.
-4. Gesture in one of eight directions to move by one grid step.
-5. Scroll up for smaller steps; scroll down for larger steps.
-6. Release the shortcut to keep the pointer position.
+2. Move the mouse normally. Physical movement is continuously mapped onto the
+   connected display topology.
+3. Scroll up to zoom in for precise movement.
+4. Scroll down to zoom out for fast, accelerated travel.
+5. Release the shortcut to keep the pointer position.
 
-Grid lines remain fixed while the pointer moves between cells. Nearby cells
-become clearer and more distant cells fade smoothly. There are no parent or
-child regions, and scrolling changes only the grid density—it never moves the
-pointer.
+At the coarsest scale, displays are connected through a simplified
+eight-direction topology. Zoomed movement uses their real Windows positions,
+sizes, alignment, and gaps. Scaling is animated and never moves the pointer by
+itself.
 
-Right-click cancels the operation and restores the original pointer position.
+The overlay visualizes the current map scale with fixed grid lines and
+distance-based fading. Right-click cancels and restores the activation
+position.
 
 ## Features
 
-- Angle-aware multi-monitor selection that favors the nearest aligned display
-- Balanced eight-direction gestures with a radial dead zone
-- Fixed screen grid with pointer-distance-based fading
+- Continuous movement without cell-center jumps, thresholds, or cooldowns
+- Zoom-based pointer acceleration and precision
+- Eight-direction display topology at the coarsest scale
+- Actual Windows display geometry while zoomed
 - One-to-three-key activation sequences, including held-key combinations
-- Configurable gesture distance, cooldown, sequence timeout, and maximum depth
-- Lightweight tray interface with no virtual cursor or nested grid state
+- Configurable map response, maximum zoom depth, and status HUD
+- Lightweight tray interface with no virtual cursor
 
 ## Build
 

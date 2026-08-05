@@ -118,17 +118,18 @@ public partial class OverlayWindow : Window
             (preview.ActualCursor.X - display.Bounds.Left) * scaleX;
         var cursorY =
             (preview.ActualCursor.Y - display.Bounds.Top) * scaleY;
-        var gridSize = Math.Max(preview.GridSize, 1);
+        var mapScale = Math.Max(preview.MapScale, 1);
+        var gridSize = Math.Max((int)Math.Ceiling(mapScale), 1);
+        var nominalCellWidth = OverlayCanvas.ActualWidth / mapScale;
+        var nominalCellHeight = OverlayCanvas.ActualHeight / mapScale;
         var currentColumn = Math.Clamp(
-            (int)Math.Floor(cursorX / OverlayCanvas.ActualWidth * gridSize),
+            (int)Math.Floor(cursorX / nominalCellWidth),
             0,
             gridSize - 1);
         var currentRow = Math.Clamp(
-            (int)Math.Floor(cursorY / OverlayCanvas.ActualHeight * gridSize),
+            (int)Math.Floor(cursorY / nominalCellHeight),
             0,
             gridSize - 1);
-        var nominalCellWidth = OverlayCanvas.ActualWidth / gridSize;
-        var nominalCellHeight = OverlayCanvas.ActualHeight / gridSize;
 
         ScreenBorder.Visibility = Visibility.Collapsed;
         FloatingGridCanvas.Visibility = Visibility.Visible;
@@ -151,17 +152,14 @@ public partial class OverlayWindow : Window
             }
 
             cell.Visibility = Visibility.Visible;
-            var left =
-                OverlayCanvas.ActualWidth * globalColumn / gridSize;
-            var right =
-                OverlayCanvas.ActualWidth * (globalColumn + 1) / gridSize;
-            var top =
-                OverlayCanvas.ActualHeight * globalRow / gridSize;
-            var bottom =
-                OverlayCanvas.ActualHeight * (globalRow + 1) / gridSize;
+            var left = nominalCellWidth * globalColumn;
+            var right = nominalCellWidth * (globalColumn + 1);
+            var top = nominalCellHeight * globalRow;
+            var bottom = nominalCellHeight * (globalRow + 1);
             var cellWidth = Math.Max(right - left, 2);
             var cellHeight = Math.Max(bottom - top, 2);
-            var isCurrent = row == 0 && column == 0;
+            var isCurrent =
+                _isSelectedScreen && row == 0 && column == 0;
 
             Canvas.SetLeft(cell, left);
             Canvas.SetTop(cell, top);
@@ -171,7 +169,8 @@ public partial class OverlayWindow : Window
                 Math.Min(8, Math.Min(cellWidth, cellHeight) / 8));
             cell.Background = isCurrent
                 ? _accentBrush
-                : Math.Max(Math.Abs(row), Math.Abs(column)) <= 1
+                : _isSelectedScreen
+                    && Math.Max(Math.Abs(row), Math.Abs(column)) <= 1
                     ? _softAccentBrush
                     : _transparentBrush;
             cell.BorderThickness = new Thickness(isCurrent ? 3 : 1);
@@ -187,11 +186,13 @@ public partial class OverlayWindow : Window
             cell.Opacity = CellOpacity(normalizedDistance, isCurrent);
         }
 
-        CursorMarker.Visibility = Visibility.Visible;
+        CursorMarker.Visibility =
+            _isSelectedScreen ? Visibility.Visible : Visibility.Collapsed;
         Canvas.SetLeft(CursorMarker, cursorX - CursorMarker.Width / 2);
         Canvas.SetTop(CursorMarker, cursorY - CursorMarker.Height / 2);
 
-        LevelLabelBorder.Visibility = Visibility.Visible;
+        LevelLabelBorder.Visibility =
+            _isSelectedScreen ? Visibility.Visible : Visibility.Collapsed;
         LevelLabel.Text = preview.Label;
         Canvas.SetLeft(
             LevelLabelBorder,

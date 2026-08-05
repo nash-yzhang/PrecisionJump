@@ -28,6 +28,8 @@ public sealed class ScreenOverlayMap : IDisposable
         EnsureCurrentMap();
         foreach (var (deviceName, item) in _windows)
         {
+            var isSelectedDisplay =
+                deviceName == preview.Display.DeviceName;
             if (preview.IsScreenLevel)
             {
                 var screenPreview = preview with
@@ -36,15 +38,21 @@ public sealed class ScreenOverlayMap : IDisposable
                 };
                 item.Window.ShowPreview(
                     screenPreview,
-                    deviceName == preview.Display.DeviceName);
-            }
-            else if (deviceName == preview.Display.DeviceName)
-            {
-                item.Window.ShowPreview(preview);
+                    isSelectedDisplay);
             }
             else
             {
-                item.Window.Hide();
+                var displayPreview = preview with
+                {
+                    Display = item.Display,
+                    StepX = item.Display.Bounds.Width
+                        / Math.Max(preview.MapScale, 1),
+                    StepY = item.Display.Bounds.Height
+                        / Math.Max(preview.MapScale, 1)
+                };
+                item.Window.ShowPreview(
+                    displayPreview,
+                    isSelectedDisplay);
             }
         }
     }

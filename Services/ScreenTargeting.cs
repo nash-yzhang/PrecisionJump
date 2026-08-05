@@ -15,7 +15,7 @@ public sealed record NineGridPreview(
     DisplayMonitor Display,
     Point ActualCursor,
     int Depth,
-    int GridSize,
+    double MapScale,
     double StepX,
     double StepY)
 {
@@ -23,7 +23,7 @@ public sealed record NineGridPreview(
 
     public string Label => IsScreenLevel
         ? $"SCREEN {Display.Number}"
-        : $"LEVEL {Depth}";
+        : $"ZOOM {MapScale:F1}×";
 }
 
 public sealed record GridInteraction(
@@ -32,10 +32,16 @@ public sealed record GridInteraction(
 
 public sealed class NineGridSession
 {
+    private const double ScaleAnimationSeconds = 0.14;
+
     private readonly IReadOnlyList<DisplayMonitor> _displays;
-    private Point _movementAnchor;
-    private long _blockedUntil;
+    private double _mapX;
+    private double _mapY;
     private int _depth;
+    private double _scale = 1;
+    private double _scaleStart = 1;
+    private double _scaleTarget = 1;
+    private long _scaleStartedAt;
 
     public NineGridSession(
         Point origin,
@@ -48,88 +54,65 @@ public sealed class NineGridSession
 
         _displays = displays;
         Origin = origin;
-        CurrentPosition = origin;
-        _movementAnchor = origin;
+        _mapX = origin.X;
+        _mapY = origin.Y;
         Display = FindDisplay(origin);
         Preview = CreatePreview();
     }
 
     public Point Origin { get; }
-    public Point CurrentPosition { get; private set; }
+    public Point CurrentPosition => RoundedPosition();
     public DisplayMonitor Display { get; private set; }
     public int Depth => _depth;
-    public int GridSize => GridSizeAtDepth(Depth);
-    public double StepX => Display.Bounds.Width / (double)GridSize;
-    public double StepY => Display.Bounds.Height / (double)GridSize;
+    public double MapScale => _scale;
+    public double StepX => Display.Bounds.Width / Math.Max(_scale, 1);
+    public double StepY => Display.Bounds.Height / Math.Max(_scale, 1);
     public NineGridPreview Preview { get; private set; }
 
-    public GridInteraction Move(
-        Point actualPosition,
-        double selectionDistance,
-        TimeSpan cooldown,
+    public bool IsScaleAnimating
+    {
+        get
+        {
+            var elapsed = (Stopwatch.GetTimestamp() - _scaleStartedAt)
+                / (double)Stopwatch.Frequency;
+            return Math.Abs(_scale - _scaleTarget) > 0.001
+                && elapsed < ScaleAnimationSeconds;
+        }
+    }
+
+    public GridInteraction MoveContinuous(
+        double physicalDeltaX,
+        double physicalDeltaY,
+        double mapUnitTravelDistance,
         long? nowTicks = null)
     {
-        var now = nowTicks ?? Stopwatch.GetTimestamp();
-        CurrentPosition = actualPosition;
-
-        if (now < _blockedUntil)
+        UpdateScale(nowTicks);
+        if (physicalDeltaX == 0 && physicalDeltaY == 0)
         {
             Preview = CreatePreview();
             return new GridInteraction(Preview, null);
         }
 
-        var dx = actualPosition.X - _movementAnchor.X;
-        var dy = actualPosition.Y - _movementAnchor.Y;
-        if (!ClearsThreshold(dx, dy, selectionDistance))
-        {
-            Preview = CreatePreview();
-            return new GridInteraction(Preview, null);
-        }
-
+        var travel = Math.Max(mapUnitTravelDistance, 1);
         if (Depth == 0)
         {
-            var targetDisplay = FindDirectionalDisplay(dx, dy);
-            if (targetDisplay is null)
-            {
-                _movementAnchor = actualPosition;
-                Preview = CreatePreview();
-                return new GridInteraction(Preview, null);
-            }
-
-            Display = targetDisplay;
-            var screenTarget = Center(Display.Bounds);
-            CurrentPosition = screenTarget;
-            _movementAnchor = screenTarget;
-            _blockedUntil = now + ToStopwatchTicks(cooldown);
-            Preview = CreatePreview();
-            return new GridInteraction(Preview, screenTarget);
+            MoveOnDiscreteScreenMap(
+                physicalDeltaX / (travel * _scale),
+                physicalDeltaY / (travel * _scale));
         }
-
-        var (rowDelta, columnDelta) = Direction(
-            dx,
-            dy,
-            selectionDistance);
-        var target = FixedGridTarget(
-            _movementAnchor,
-            rowDelta,
-            columnDelta);
-        if (target == _movementAnchor)
+        else
         {
-            _movementAnchor = actualPosition;
-            Preview = CreatePreview();
-            return new GridInteraction(Preview, null);
+            MoveOnActualDisplayMap(
+                physicalDeltaX * Display.Bounds.Width / (travel * _scale),
+                physicalDeltaY * Display.Bounds.Height / (travel * _scale));
         }
 
-        CurrentPosition = target;
-        _movementAnchor = target;
-        _blockedUntil = now + ToStopwatchTicks(cooldown);
         Preview = CreatePreview();
-        return new GridInteraction(Preview, target);
+        return new GridInteraction(Preview, CurrentPosition);
     }
 
     public GridInteraction ZoomIn(
         int maximumDepth,
-        TimeSpan cooldown,
         Point? actualPosition = null,
         long? nowTicks = null)
     {
@@ -138,24 +121,16 @@ public sealed class NineGridSession
             return new GridInteraction(Preview, null);
         }
 
-        var nextGridSize = Math.Pow(3, Depth + 1);
-        if (
-            Display.Bounds.Width < nextGridSize
-            || Display.Bounds.Height < nextGridSize
-        )
+        if (actualPosition is Point position)
         {
-            return new GridInteraction(Preview, null);
+            SyncPosition(position);
         }
-
-        _depth++;
-        var position = actualPosition ?? CurrentPosition;
-        Reanchor(position, cooldown, nowTicks);
+        StartScaleTransition(Depth + 1, nowTicks);
         Preview = CreatePreview();
         return new GridInteraction(Preview, null);
     }
 
     public GridInteraction ZoomOut(
-        TimeSpan cooldown,
         Point? actualPosition = null,
         long? nowTicks = null)
     {
@@ -164,32 +139,317 @@ public sealed class NineGridSession
             return new GridInteraction(Preview, null);
         }
 
-        _depth--;
-        var position = actualPosition ?? CurrentPosition;
-        Reanchor(position, cooldown, nowTicks);
+        if (actualPosition is Point position)
+        {
+            SyncPosition(position);
+        }
+        StartScaleTransition(Depth - 1, nowTicks);
         Preview = CreatePreview();
         return new GridInteraction(Preview, null);
     }
 
-    public void AcceptProgrammaticPosition(
-        Point actualPosition,
-        TimeSpan cooldown,
-        long? nowTicks = null)
+    public NineGridPreview RefreshScale(long? nowTicks = null)
     {
-        Reanchor(actualPosition, cooldown, nowTicks);
+        UpdateScale(nowTicks);
+        Preview = CreatePreview();
+        return Preview;
+    }
+
+    public void AcceptProgrammaticPosition(Point actualPosition)
+    {
+        SyncPosition(actualPosition);
         Preview = CreatePreview();
     }
 
-    public static (int RowDelta, int ColumnDelta) Direction(
-        double dx,
-        double dy,
-        double selectionDistance)
+    private void MoveOnDiscreteScreenMap(
+        double normalizedDeltaX,
+        double normalizedDeltaY)
     {
-        if (!ClearsThreshold(dx, dy, selectionDistance))
+        var bounds = Display.Bounds;
+        var width = Math.Max(bounds.Width - 1, 1);
+        var height = Math.Max(bounds.Height - 1, 1);
+        var u = (_mapX - bounds.Left) / width + normalizedDeltaX;
+        var v = (_mapY - bounds.Top) / height + normalizedDeltaY;
+
+        for (var iteration = 0; iteration < 8; iteration++)
         {
-            return (0, 0);
+            var columnDirection = u < 0 ? -1 : u > 1 ? 1 : 0;
+            var rowDirection = v < 0 ? -1 : v > 1 ? 1 : 0;
+            if (rowDirection == 0 && columnDirection == 0)
+            {
+                break;
+            }
+
+            var nextDisplay = FindDiscreteDisplay(
+                rowDirection,
+                columnDirection);
+            if (nextDisplay is null)
+            {
+                u = Math.Clamp(u, 0, 1);
+                v = Math.Clamp(v, 0, 1);
+                break;
+            }
+
+            if (columnDirection > 0)
+            {
+                u -= 1;
+            }
+            else if (columnDirection < 0)
+            {
+                u += 1;
+            }
+            if (rowDirection > 0)
+            {
+                v -= 1;
+            }
+            else if (rowDirection < 0)
+            {
+                v += 1;
+            }
+
+            Display = nextDisplay;
         }
 
+        bounds = Display.Bounds;
+        _mapX = bounds.Left
+            + Math.Clamp(u, 0, 1) * Math.Max(bounds.Width - 1, 1);
+        _mapY = bounds.Top
+            + Math.Clamp(v, 0, 1) * Math.Max(bounds.Height - 1, 1);
+    }
+
+    private void MoveOnActualDisplayMap(
+        double mapDeltaX,
+        double mapDeltaY)
+    {
+        var proposedX = _mapX + mapDeltaX;
+        var proposedY = _mapY + mapDeltaY;
+        if (Contains(Display.Bounds, proposedX, proposedY))
+        {
+            _mapX = proposedX;
+            _mapY = proposedY;
+            return;
+        }
+
+        var containingDisplay = _displays.FirstOrDefault(
+            display => Contains(display.Bounds, proposedX, proposedY));
+        if (containingDisplay is not null)
+        {
+            Display = containingDisplay;
+            _mapX = proposedX;
+            _mapY = proposedY;
+            return;
+        }
+
+        var crossing = FindActualLayoutCrossing(
+            _mapX,
+            _mapY,
+            mapDeltaX,
+            mapDeltaY);
+        if (crossing is not null)
+        {
+            var (targetDisplay, entryX, entryY) = crossing.Value;
+            Display = targetDisplay;
+            _mapX = entryX;
+            _mapY = entryY;
+            return;
+        }
+
+        // Keep integrating through real virtual-desktop gaps. The visible
+        // pointer remains projected to the current display edge until the
+        // continuous map coordinate enters another display rectangle.
+        _mapX = proposedX;
+        _mapY = proposedY;
+    }
+
+    private void StartScaleTransition(int depth, long? nowTicks)
+    {
+        var now = nowTicks ?? Stopwatch.GetTimestamp();
+        UpdateScale(now);
+        _depth = depth;
+        _scaleStart = _scale;
+        _scaleTarget = Math.Pow(3, depth);
+        _scaleStartedAt = now;
+    }
+
+    private void UpdateScale(long? nowTicks)
+    {
+        if (Math.Abs(_scale - _scaleTarget) <= 0.001)
+        {
+            _scale = _scaleTarget;
+            return;
+        }
+
+        var now = nowTicks ?? Stopwatch.GetTimestamp();
+        var elapsed = (now - _scaleStartedAt)
+            / (double)Stopwatch.Frequency;
+        var progress = Math.Clamp(
+            elapsed / ScaleAnimationSeconds,
+            0,
+            1);
+        var eased = progress * progress * (3 - 2 * progress);
+        _scale = _scaleStart
+            + (_scaleTarget - _scaleStart) * eased;
+        if (progress >= 1)
+        {
+            _scale = _scaleTarget;
+        }
+    }
+
+    private void SyncPosition(Point position)
+    {
+        _mapX = position.X;
+        _mapY = position.Y;
+        Display = FindDisplay(position);
+    }
+
+    private NineGridPreview CreatePreview()
+    {
+        return new NineGridPreview(
+            Display,
+            CurrentPosition,
+            Depth,
+            _scale,
+            StepX,
+            StepY);
+    }
+
+    private DisplayMonitor? FindDiscreteDisplay(
+        int rowDirection,
+        int columnDirection)
+    {
+        var currentCenter = Center(Display.Bounds);
+        return _displays
+            .Where(candidate => candidate.DeviceName != Display.DeviceName)
+            .Select(candidate =>
+            {
+                var candidateCenter = Center(candidate.Bounds);
+                var dx = candidateCenter.X - currentCenter.X;
+                var dy = candidateCenter.Y - currentCenter.Y;
+                return new
+                {
+                    Display = candidate,
+                    Direction = Octant(dx, dy),
+                    DistanceSquared =
+                        (long)dx * dx + (long)dy * dy
+                };
+            })
+            .Where(candidate =>
+                candidate.Direction
+                    == (Row: rowDirection, Column: columnDirection))
+            .OrderBy(candidate => candidate.DistanceSquared)
+            .Select(candidate => candidate.Display)
+            .FirstOrDefault();
+    }
+
+    private (DisplayMonitor Display, double X, double Y)?
+        FindActualLayoutCrossing(
+            double originX,
+            double originY,
+            double directionX,
+            double directionY)
+    {
+        var length = Math.Sqrt(
+            directionX * directionX + directionY * directionY);
+        if (length <= 0)
+        {
+            return null;
+        }
+
+        var crossing = _displays
+            .Where(candidate => candidate.DeviceName != Display.DeviceName)
+            .Select(candidate => new
+            {
+                Display = candidate,
+                Entry = RayRectangleEntry(
+                    originX,
+                    originY,
+                    directionX,
+                    directionY,
+                    candidate.Bounds)
+            })
+            .Where(candidate =>
+                candidate.Entry is >= 0 and <= 1)
+            .OrderBy(candidate => candidate.Entry)
+            .FirstOrDefault();
+        if (crossing?.Entry is not double entry)
+        {
+            return null;
+        }
+
+        var unitX = directionX / length;
+        var unitY = directionY / length;
+        var bounds = crossing.Display.Bounds;
+        return (
+            crossing.Display,
+            Math.Clamp(
+                originX + directionX * entry + unitX,
+                bounds.Left,
+                bounds.Right - 1),
+            Math.Clamp(
+                originY + directionY * entry + unitY,
+                bounds.Top,
+                bounds.Bottom - 1));
+    }
+
+    private static double? RayRectangleEntry(
+        double originX,
+        double originY,
+        double directionX,
+        double directionY,
+        Rectangle rectangle)
+    {
+        var minimum = double.NegativeInfinity;
+        var maximum = double.PositiveInfinity;
+        if (!UpdateRayInterval(
+            originX,
+            directionX,
+            rectangle.Left,
+            rectangle.Right,
+            ref minimum,
+            ref maximum)
+            || !UpdateRayInterval(
+                originY,
+                directionY,
+                rectangle.Top,
+                rectangle.Bottom,
+                ref minimum,
+                ref maximum))
+        {
+            return null;
+        }
+
+        var entry = Math.Max(minimum, 0);
+        return maximum >= entry ? entry : null;
+    }
+
+    private static bool UpdateRayInterval(
+        double origin,
+        double direction,
+        double minimumBound,
+        double maximumBound,
+        ref double minimum,
+        ref double maximum)
+    {
+        const double epsilon = 0.000001;
+        if (Math.Abs(direction) < epsilon)
+        {
+            return origin >= minimumBound && origin <= maximumBound;
+        }
+
+        var first = (minimumBound - origin) / direction;
+        var second = (maximumBound - origin) / direction;
+        if (first > second)
+        {
+            (first, second) = (second, first);
+        }
+
+        minimum = Math.Max(minimum, first);
+        maximum = Math.Min(maximum, second);
+        return maximum >= minimum;
+    }
+
+    private static (int Row, int Column) Octant(double dx, double dy)
+    {
         var angle = Math.Atan2(dy, dx);
         var octant = (int)Math.Round(
             angle / (Math.PI / 4),
@@ -206,162 +466,6 @@ public sealed class NineGridSession
             6 => (-1, 0),
             _ => (-1, 1)
         };
-    }
-
-    private static bool ClearsThreshold(
-        double dx,
-        double dy,
-        double selectionDistance)
-    {
-        return dx * dx + dy * dy
-            >= selectionDistance * selectionDistance;
-    }
-
-    private Point FixedGridTarget(
-        Point anchor,
-        int rowDelta,
-        int columnDelta)
-    {
-        var (currentRow, currentColumn) = FindGridCell(
-            Display.Bounds,
-            GridSize,
-            anchor);
-        var targetRow = Math.Clamp(
-            currentRow + rowDelta,
-            0,
-            GridSize - 1);
-        var targetColumn = Math.Clamp(
-            currentColumn + columnDelta,
-            0,
-            GridSize - 1);
-        if (
-            targetRow == currentRow
-            && targetColumn == currentColumn
-        )
-        {
-            return anchor;
-        }
-
-        return Center(GridCell(
-            Display.Bounds,
-            GridSize,
-            targetRow,
-            targetColumn));
-    }
-
-    private void Reanchor(
-        Point position,
-        TimeSpan cooldown,
-        long? nowTicks)
-    {
-        CurrentPosition = position;
-        _movementAnchor = position;
-        var now = nowTicks ?? Stopwatch.GetTimestamp();
-        _blockedUntil = now + ToStopwatchTicks(cooldown);
-    }
-
-    private NineGridPreview CreatePreview()
-    {
-        return new NineGridPreview(
-            Display,
-            CurrentPosition,
-            Depth,
-            GridSize,
-            StepX,
-            StepY);
-    }
-
-    public static Rectangle GridCell(
-        Rectangle region,
-        int gridSize,
-        int row,
-        int column)
-    {
-        gridSize = Math.Max(gridSize, 1);
-        row = Math.Clamp(row, 0, gridSize - 1);
-        column = Math.Clamp(column, 0, gridSize - 1);
-        var left = region.Left + region.Width * column / gridSize;
-        var right = region.Left + region.Width * (column + 1) / gridSize;
-        var top = region.Top + region.Height * row / gridSize;
-        var bottom = region.Top + region.Height * (row + 1) / gridSize;
-        return Rectangle.FromLTRB(left, top, right, bottom);
-    }
-
-    public static (int Row, int Column) FindGridCell(
-        Rectangle region,
-        int gridSize,
-        Point position)
-    {
-        gridSize = Math.Max(gridSize, 1);
-        var relativeX =
-            (position.X - region.Left) / (double)Math.Max(region.Width, 1);
-        var relativeY =
-            (position.Y - region.Top) / (double)Math.Max(region.Height, 1);
-        return (
-            Math.Clamp((int)Math.Floor(relativeY * gridSize), 0, gridSize - 1),
-            Math.Clamp((int)Math.Floor(relativeX * gridSize), 0, gridSize - 1));
-    }
-
-    private static int GridSizeAtDepth(int depth)
-    {
-        var size = 1;
-        for (var index = 0; index < depth; index++)
-        {
-            size *= 3;
-        }
-        return size;
-    }
-
-    private DisplayMonitor? FindDirectionalDisplay(double dx, double dy)
-    {
-        var gestureLength = Math.Sqrt(dx * dx + dy * dy);
-        if (gestureLength <= 0)
-        {
-            return null;
-        }
-
-        var currentCenter = Center(Display.Bounds);
-        var candidates = _displays
-            .Where(candidate => candidate.DeviceName != Display.DeviceName)
-            .Select(candidate =>
-            {
-                var candidateCenter = Center(candidate.Bounds);
-                var candidateX = candidateCenter.X - currentCenter.X;
-                var candidateY = candidateCenter.Y - currentCenter.Y;
-                var candidateLength = Math.Sqrt(
-                    candidateX * candidateX + candidateY * candidateY);
-                var cosine = candidateLength <= 0
-                    ? -1
-                    : (dx * candidateX + dy * candidateY)
-                        / (gestureLength * candidateLength);
-                return new
-                {
-                    Display = candidate,
-                    Cosine = cosine,
-                    DistanceSquared =
-                        (long)candidateX * candidateX
-                        + (long)candidateY * candidateY
-                };
-            })
-            .Where(candidate => candidate.Cosine > 0)
-            .ToList();
-        if (candidates.Count == 0)
-        {
-            return null;
-        }
-
-        // Treat monitors within a small angular band as being in the same
-        // intended direction, then choose the nearest. This prevents a far
-        // monitor with a marginally better center angle from hiding a middle
-        // monitor in an uneven physical layout.
-        var bestCosine = candidates.Max(candidate => candidate.Cosine);
-        const double angularScoreTolerance = 0.12;
-        return candidates
-            .Where(candidate =>
-                candidate.Cosine >= bestCosine - angularScoreTolerance)
-            .OrderBy(candidate => candidate.DistanceSquared)
-            .Select(candidate => candidate.Display)
-            .FirstOrDefault();
     }
 
     private DisplayMonitor FindDisplay(Point point)
@@ -386,16 +490,36 @@ public sealed class NineGridSession
                 .First();
     }
 
+    private Point RoundedPosition()
+    {
+        var bounds = Display.Bounds;
+        return new Point(
+            Math.Clamp(
+                (int)Math.Round(_mapX),
+                bounds.Left,
+                bounds.Right - 1),
+            Math.Clamp(
+                (int)Math.Round(_mapY),
+                bounds.Top,
+                bounds.Bottom - 1));
+    }
+
+    private static bool Contains(
+        Rectangle bounds,
+        double x,
+        double y)
+    {
+        return x >= bounds.Left
+            && x < bounds.Right
+            && y >= bounds.Top
+            && y < bounds.Bottom;
+    }
+
     private static Point Center(Rectangle region)
     {
         return new Point(
             region.Left + region.Width / 2,
             region.Top + region.Height / 2);
-    }
-
-    private static long ToStopwatchTicks(TimeSpan duration)
-    {
-        return (long)Math.Round(duration.TotalSeconds * Stopwatch.Frequency);
     }
 
     public static IReadOnlyList<DisplayMonitor> GetDisplays()

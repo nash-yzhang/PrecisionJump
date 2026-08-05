@@ -94,14 +94,14 @@
 
             <Border Grid.Row="2" Style="{StaticResource CardStyle}">
                 <StackPanel>
-                    <TextBlock Text="NINE-GRID REFINEMENT" Style="{StaticResource SectionLabelStyle}"/>
+                    <TextBlock Text="CONTINUOUS MAP" Style="{StaticResource SectionLabelStyle}"/>
 
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Text="Selection gesture distance"/>
+                        <TextBlock Text="Physical travel per map unit"/>
                         <TextBlock Grid.Column="1"
                                    Style="{StaticResource ValueStyle}"
                                    Text="{Binding SelectionDistance, StringFormat={}{0:F0} px}"/>
@@ -111,22 +111,6 @@
                             TickFrequency="2"
                             IsSnapToTickEnabled="True"
                             Value="{Binding SelectionDistance, Mode=TwoWay}"/>
-
-                    <Grid Margin="0,14,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="Post-jump cooldown"/>
-                        <TextBlock Grid.Column="1"
-                                   Style="{StaticResource ValueStyle}"
-                                   Text="{Binding SelectionCooldownMilliseconds, StringFormat={}{0} ms}"/>
-                    </Grid>
-                    <Slider Minimum="40"
-                            Maximum="400"
-                            TickFrequency="10"
-                            IsSnapToTickEnabled="True"
-                            Value="{Binding SelectionCooldownMilliseconds, Mode=TwoWay}"/>
 
                     <Grid Margin="0,14,0,0">
                         <Grid.ColumnDefinitions>
@@ -159,16 +143,16 @@
                         <TextBlock Text="HOW IT WORKS"
                                    Style="{StaticResource SectionLabelStyle}"
                                    Margin="0,0,0,10"/>
-                        <TextBlock Text="Hold the final shortcut key to enter the screen level. A directional gesture selects the nearest aligned screen."
+                        <TextBlock Text="Physical mouse deltas move continuously through the connected display map."
                                    TextWrapping="Wrap"
                                    FontSize="12"
                                    Margin="0,0,0,6"/>
-                        <TextBlock Text="Wheel up for smaller steps or down for larger steps. Scrolling never moves the pointer."
+                        <TextBlock Text="Wheel up to zoom in for precision or down to zoom out for acceleration. Scaling is smoothly animated."
                                    TextWrapping="Wrap"
                                    FontSize="12"
                                    Foreground="{StaticResource MutedBrush}"
                                    Margin="0,0,0,6"/>
-                        <TextBlock Text="The fixed grid stays in place while cell visibility follows the pointer. Release to keep the position; right-click cancels."
+                        <TextBlock Text="The coarsest topology uses eight-direction display links; zoomed movement follows the real display layout."
                                    TextWrapping="Wrap"
                                    FontSize="12"
                                    Foreground="{StaticResource MutedBrush}"/>

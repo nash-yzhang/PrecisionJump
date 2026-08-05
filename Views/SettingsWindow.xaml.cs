@@ -124,7 +124,7 @@ public partial class SettingsWindow : Window
         StatusText.Text = !_settings.Enabled
             ? "Paused"
             : _inputEngine.JumpActive
-                ? "Nine-grid active · gesture to select · wheel to refine"
+                ? "Continuous map active · wheel to change scale"
                 : "Ready in the background";
         StatusText.Foreground = _inputEngine.JumpActive
             ? (System.Windows.Media.Brush)FindResource("AccentBrush")
