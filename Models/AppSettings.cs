@@ -13,6 +13,8 @@ public sealed class AppSettings : INotifyPropertyChanged
     private int _selectionCooldownMilliseconds = 120;
     private int _maximumZoomLevel = 8;
     private bool _showStatusHud = true;
+    private bool _recordMouseEvents;
+    private bool _startWithWindows;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -78,6 +80,18 @@ public sealed class AppSettings : INotifyPropertyChanged
         set => SetField(ref _showStatusHud, value);
     }
 
+    public bool RecordMouseEvents
+    {
+        get => _recordMouseEvents;
+        set => SetField(ref _recordMouseEvents, value);
+    }
+
+    public bool StartWithWindows
+    {
+        get => _startWithWindows;
+        set => SetField(ref _startWithWindows, value);
+    }
+
     [JsonIgnore]
     public string ScreenJumpDisplay =>
         string.Join("  →  ", ScreenJumpSequence.Select(token => token.DisplayName));
@@ -91,6 +105,8 @@ public sealed class AppSettings : INotifyPropertyChanged
         SelectionCooldownMilliseconds = 120;
         MaximumZoomLevel = 8;
         ShowStatusHud = true;
+        RecordMouseEvents = false;
+        StartWithWindows = false;
     }
 
     public void Normalize()

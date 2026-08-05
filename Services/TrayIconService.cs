@@ -43,7 +43,7 @@ public sealed class TrayIconService : IDisposable
     public void SetJumpActive(bool active)
     {
         _notifyIcon.Text = active
-            ? "Precision Jump — nine-grid active"
+            ? "Precision Jump — continuous map active"
             : "Precision Jump — ready";
     }
 

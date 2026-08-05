@@ -131,6 +131,19 @@
                     <CheckBox Content="Show confirm/cancel HUD"
                               IsChecked="{Binding ShowStatusHud, Mode=TwoWay}"
                               Margin="0,16,0,0"/>
+
+                    <CheckBox Content="Record mouse movement and clicks to CSV"
+                              IsChecked="{Binding RecordMouseEvents, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                              Margin="0,12,0,0"/>
+                    <TextBlock Text="CSV: %LOCALAPPDATA%\MouseAccelerator\mouse-events-&lt;session UTC&gt;.csv"
+                               TextWrapping="Wrap"
+                               FontSize="11"
+                               Foreground="{StaticResource MutedBrush}"
+                               Margin="24,3,0,0"/>
+
+                    <CheckBox Content="Start with Windows"
+                              IsChecked="{Binding StartWithWindows, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                              Margin="0,12,0,0"/>
                 </StackPanel>
             </Border>
 

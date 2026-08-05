@@ -10,6 +10,7 @@ public partial class App : System.Windows.Application
 {
     private Mutex? _singleInstance;
     private SettingsStore? _settingsStore;
+    private StartupRegistrationService? _startupRegistration;
     private GlobalInputEngine? _inputEngine;
     private TrayIconService? _trayIcon;
     private SettingsWindow? _settingsWindow;
@@ -41,6 +42,7 @@ public partial class App : System.Windows.Application
 
         Settings = SettingsStore.Load();
         _settingsStore = new SettingsStore(Settings);
+        _startupRegistration = new StartupRegistrationService(Settings);
 
         _inputEngine = new GlobalInputEngine(Settings, Dispatcher);
         InputEngine = _inputEngine;
@@ -64,7 +66,12 @@ public partial class App : System.Windows.Application
             quit: () => Shutdown());
         _inputEngine.JumpStateChanged += active => _trayIcon.SetJumpActive(active);
 
-        ShowSettings();
+        if (!e.Args.Contains(
+            "--startup",
+            StringComparer.OrdinalIgnoreCase))
+        {
+            ShowSettings();
+        }
     }
 
     public void ShowSettings()
@@ -95,6 +102,7 @@ public partial class App : System.Windows.Application
     {
         _inputEngine?.Dispose();
         _trayIcon?.Dispose();
+        _startupRegistration?.Dispose();
         _settingsStore?.Dispose();
         if (_ownsSingleInstance)
         {

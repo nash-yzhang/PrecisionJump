@@ -19,6 +19,7 @@ public sealed class GlobalInputEngine : IDisposable
     private readonly HashSet<int> _heldKeys = [];
     private readonly HashSet<int> _suppressedShortcutKeys = [];
     private readonly ScreenOverlayMap _overlayMap;
+    private readonly MouseEventRecorder _mouseEventRecorder;
     private readonly DispatcherTimer _scaleAnimationTimer;
 
     private nint _keyboardHook;
@@ -32,6 +33,7 @@ public sealed class GlobalInputEngine : IDisposable
     private NineGridPreview? _queuedPreview;
     private bool _previewRenderQueued;
     private long _lastMoveDiagnosticAt;
+    private Point? _lastObservedCursorPosition;
     private ModeHudWindow? _hud;
     private bool _disposed;
 
@@ -42,6 +44,7 @@ public sealed class GlobalInputEngine : IDisposable
         _keyboardCallback = KeyboardHookCallback;
         _mouseCallback = MouseHookCallback;
         _overlayMap = new ScreenOverlayMap(dispatcher);
+        _mouseEventRecorder = new MouseEventRecorder();
         _scaleAnimationTimer = new DispatcherTimer(
             DispatcherPriority.Render,
             dispatcher)
@@ -143,14 +146,32 @@ public sealed class GlobalInputEngine : IDisposable
         try
         {
             var message = wParam.ToInt32();
+            var hookData =
+                Marshal.PtrToStructure<NativeMethods.MouseHookData>(lParam);
+            var isInjected =
+                (hookData.Flags & NativeMethods.LlmhfInjected) != 0;
+            var hookPosition = new Point(
+                hookData.Position.X,
+                hookData.Position.Y);
+            if (isInjected && message == NativeMethods.WmMouseMove)
+            {
+                _lastObservedCursorPosition = hookPosition;
+            }
             if (_gestureSession is not null)
             {
+                if (!isInjected && message != NativeMethods.WmMouseMove)
+                {
+                    RecordMouseHookEvent(
+                        message,
+                        hookData,
+                        jumping: true);
+                }
+
                 switch (message)
                 {
                     case NativeMethods.WmMouseMove:
                     {
-                        var data = Marshal.PtrToStructure<NativeMethods.MouseHookData>(lParam);
-                        if ((data.Flags & NativeMethods.LlmhfInjected) != 0)
+                        if (isInjected)
                         {
                             return NativeMethods.CallNextHookEx(
                                 _mouseHook,
@@ -159,15 +180,24 @@ public sealed class GlobalInputEngine : IDisposable
                                 lParam);
                         }
 
-                        var position = new Point(data.Position.X, data.Position.Y);
+                        var position = hookPosition;
                         var current = _gestureSession.CurrentPosition;
+                        var rawDeltaX = position.X - current.X;
+                        var rawDeltaY = position.Y - current.Y;
                         var interaction = _gestureSession.MoveContinuous(
-                            position.X - current.X,
-                            position.Y - current.Y,
+                            rawDeltaX,
+                            rawDeltaY,
                             _settings.SelectionDistance);
                         if (interaction.JumpTarget is Point target)
                         {
                             SendAbsoluteMouseMove(target);
+                            _lastObservedCursorPosition = target;
+                            RecordMouseEvent(
+                                target,
+                                "move",
+                                jumping: true,
+                                rawDeltaX,
+                                rawDeltaY);
                         }
                         QueuePreview(interaction.Preview);
                         LogContinuousMove(
@@ -178,11 +208,13 @@ public sealed class GlobalInputEngine : IDisposable
                     }
                     case NativeMethods.WmMouseWheel:
                     {
-                        var data = Marshal.PtrToStructure<NativeMethods.MouseHookData>(lParam);
-                        var delta = unchecked((short)(data.MouseData >> 16));
+                        var delta = unchecked(
+                            (short)(hookData.MouseData >> 16));
                         AdjustDepth(
                             delta,
-                            new Point(data.Position.X, data.Position.Y));
+                            new Point(
+                                hookData.Position.X,
+                                hookData.Position.Y));
                         return 1;
                     }
                     case NativeMethods.WmMouseHorizontalWheel:
@@ -218,6 +250,27 @@ public sealed class GlobalInputEngine : IDisposable
             }
             else
             {
+                if (!isInjected)
+                {
+                    var rawDeltaX = 0;
+                    var rawDeltaY = 0;
+                    if (message == NativeMethods.WmMouseMove)
+                    {
+                        if (_lastObservedCursorPosition is Point previous)
+                        {
+                            rawDeltaX = hookPosition.X - previous.X;
+                            rawDeltaY = hookPosition.Y - previous.Y;
+                        }
+                        _lastObservedCursorPosition = hookPosition;
+                    }
+                    RecordMouseHookEvent(
+                        message,
+                        hookData,
+                        jumping: false,
+                        rawDeltaX,
+                        rawDeltaY);
+                }
+
                 if (message == NativeMethods.WmLeftButtonUp && _suppressLeftButtonUp)
                 {
                     _suppressLeftButtonUp = false;
@@ -246,6 +299,71 @@ public sealed class GlobalInputEngine : IDisposable
         }
 
         return NativeMethods.CallNextHookEx(_mouseHook, code, wParam, lParam);
+    }
+
+    private void RecordMouseHookEvent(
+        int message,
+        NativeMethods.MouseHookData data,
+        bool jumping,
+        int rawDeltaX = 0,
+        int rawDeltaY = 0)
+    {
+        var eventName = message switch
+        {
+            NativeMethods.WmMouseMove => "move",
+            NativeMethods.WmLeftButtonDown => "left_down",
+            NativeMethods.WmLeftButtonUp => "left_up",
+            NativeMethods.WmRightButtonDown => "right_down",
+            NativeMethods.WmRightButtonUp => "right_up",
+            NativeMethods.WmMiddleButtonDown => "middle_down",
+            NativeMethods.WmMiddleButtonUp => "middle_up",
+            NativeMethods.WmMouseWheel =>
+                unchecked((short)(data.MouseData >> 16)) >= 0
+                    ? "wheel_up"
+                    : "wheel_down",
+            NativeMethods.WmMouseHorizontalWheel =>
+                unchecked((short)(data.MouseData >> 16)) >= 0
+                    ? "wheel_right"
+                    : "wheel_left",
+            NativeMethods.WmXButtonDown =>
+                ((data.MouseData >> 16) & 0xffff) == 1
+                    ? "x1_down"
+                    : "x2_down",
+            NativeMethods.WmXButtonUp =>
+                ((data.MouseData >> 16) & 0xffff) == 1
+                    ? "x1_up"
+                    : "x2_up",
+            _ => null
+        };
+        if (eventName is null)
+        {
+            return;
+        }
+
+        RecordMouseEvent(
+            new Point(data.Position.X, data.Position.Y),
+            eventName,
+            jumping,
+            rawDeltaX,
+            rawDeltaY);
+    }
+
+    private void RecordMouseEvent(
+        Point position,
+        string eventName,
+        bool jumping,
+        int rawDeltaX = 0,
+        int rawDeltaY = 0)
+    {
+        if (_settings.RecordMouseEvents)
+        {
+            _mouseEventRecorder.Record(
+                position,
+                eventName,
+                jumping,
+                rawDeltaX,
+                rawDeltaY);
+        }
     }
 
     // true suppresses the key event from all other applications.
@@ -342,6 +460,8 @@ public sealed class GlobalInputEngine : IDisposable
         _gestureSession = new NineGridSession(
             new Point(cursor.X, cursor.Y),
             displays);
+        _lastObservedCursorPosition =
+            new Point(cursor.X, cursor.Y);
         _screenJumpReleaseKey = finalKey;
         DiagnosticLog(
             $"BEGIN origin={cursor.X},{cursor.Y} release={finalKey} displays={displays.Count}");
@@ -599,6 +719,7 @@ public sealed class GlobalInputEngine : IDisposable
         }
 
         _overlayMap.Dispose();
+        _mouseEventRecorder.Dispose();
         _hud?.Close();
     }
 

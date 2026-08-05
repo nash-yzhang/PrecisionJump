@@ -30,7 +30,36 @@ position.
 - Actual Windows display geometry while zoomed
 - One-to-three-key activation sequences, including held-key combinations
 - Configurable map response, maximum zoom depth, and status HUD
+- Optional mouse movement and click recording to CSV
+- Optional automatic startup with Windows
 - Lightweight tray interface with no virtual cursor
+
+## Optional event recording
+
+Enable **Record mouse movement and clicks to CSV** in Settings to append mouse
+events to:
+
+```text
+%LOCALAPPDATA%\MouseAccelerator\mouse-events-<session UTC>.csv
+```
+
+Each application session receives a new UTC-timestamped file opened with
+`CreateNew`, so an existing recording is never appended to or overwritten.
+The file has seven columns:
+
+```text
+t_us,x,y,evt,jumping,raw_dx,raw_dy
+```
+
+`jumping` is `true` while the continuous map is active. Recording runs through
+a bounded background queue so disk writes do not block the input hook.
+`t_us` is the high-resolution elapsed time since session start. `x/y` are the
+effective pointer coordinates, while `raw_dx/raw_dy` capture the input
+displacement. The writer flushes at least every 250 ms or 256 rows, including
+during uninterrupted movement.
+
+Enable **Start with Windows** to launch Precision Jump directly into the tray
+after sign-in.
 
 ## Build
 
