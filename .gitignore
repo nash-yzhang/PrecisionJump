@@ -1,7 +1,15 @@
 .DS_Store
 bin/
 obj/
-publish/
-publish-next/
+publish*/
 *.user
 .sandbox-appdata/
+mouse-events-*.csv
+mouse-events-*.csv.gz
+*.log
+settings.json
+.env
+.env.*
+!.env.example
+*.pfx
+*.snk
