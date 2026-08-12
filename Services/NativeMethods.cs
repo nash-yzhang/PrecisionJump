@@ -28,6 +28,10 @@ internal static class NativeMethods
     internal const uint MouseEventMoveNoCoalesce = 0x2000;
     internal const uint MouseEventAbsolute = 0x8000;
     internal const uint MouseEventVirtualDesk = 0x4000;
+    internal static readonly nuint MouseInjectionMarker =
+        Environment.Is64BitProcess
+            ? unchecked((nuint)0x00504A4D4F555345uL)
+            : (nuint)0x4F555345u;
     internal const int SmXVirtualScreen = 76;
     internal const int SmYVirtualScreen = 77;
     internal const int SmCxVirtualScreen = 78;

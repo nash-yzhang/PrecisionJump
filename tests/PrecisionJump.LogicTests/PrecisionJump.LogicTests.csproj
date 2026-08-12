@@ -16,5 +16,11 @@
              Link="ShortcutPolicy.cs" />
     <Compile Include="..\..\Services\SequenceMatcher.cs"
              Link="SequenceMatcher.cs" />
+    <Compile Include="..\..\Services\MouseMoveInjector.cs"
+             Link="MouseMoveInjector.cs" />
+    <Compile Include="..\..\Services\MousePositionRegisters.cs"
+             Link="MousePositionRegisters.cs" />
+    <Compile Include="..\..\Services\NativeMethods.cs"
+             Link="NativeMethods.cs" />
   </ItemGroup>
 </Project>

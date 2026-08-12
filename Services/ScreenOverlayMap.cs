@@ -10,6 +10,8 @@ public sealed class ScreenOverlayMap : IDisposable
     private readonly Dictionary<string, (DisplayMonitor Display, OverlayWindow Window)> _windows = [];
     private bool _disposed;
 
+    public event Action<IReadOnlyList<DisplayMonitor>>? DisplaysChanged;
+
     public ScreenOverlayMap(Dispatcher dispatcher)
     {
         _dispatcher = dispatcher;
@@ -95,6 +97,8 @@ public sealed class ScreenOverlayMap : IDisposable
                 _windows[display.DeviceName] = (display, window);
             }
         }
+
+        DisplaysChanged?.Invoke(Displays);
     }
 
     private void EnsureCurrentMap()
@@ -125,6 +129,7 @@ public sealed class ScreenOverlayMap : IDisposable
 
         _disposed = true;
         SystemEvents.DisplaySettingsChanged -= DisplaySettingsChanged;
+        DisplaysChanged = null;
         foreach (var item in _windows.Values)
         {
             item.Window.Close();

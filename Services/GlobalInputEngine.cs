@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
-using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Threading;
 using MouseAccelerator.Models;
@@ -11,31 +10,75 @@ namespace MouseAccelerator.Services;
 
 public sealed class GlobalInputEngine : IDisposable
 {
+    private enum PositionCommand
+    {
+        None,
+        Save,
+        Recall
+    }
+
+    private sealed record InputSettings(
+        bool Enabled,
+        bool PositionMarksEnabled,
+        int[] ScreenJumpSequence,
+        int[] SavePositionSequence,
+        int[] RecallPositionSequence,
+        double SequenceTimeoutSeconds,
+        double SelectionDistance,
+        int MaximumZoomLevel,
+        bool RecordMouseEvents)
+    {
+        internal static InputSettings From(AppSettings settings) => new(
+            settings.Enabled,
+            settings.PositionMarksEnabled,
+            settings.ScreenJumpSequence
+                .Select(token => token.VirtualKey)
+                .ToArray(),
+            settings.SavePositionSequence
+                .Select(token => token.VirtualKey)
+                .ToArray(),
+            settings.RecallPositionSequence
+                .Select(token => token.VirtualKey)
+                .ToArray(),
+            settings.SequenceTimeoutSeconds,
+            settings.SelectionDistance,
+            settings.MaximumZoomLevel,
+            settings.RecordMouseEvents);
+    }
+
     private readonly AppSettings _settings;
     private readonly Dispatcher _dispatcher;
     private readonly NativeMethods.HookProc _keyboardCallback;
     private readonly NativeMethods.HookProc _mouseCallback;
     private readonly SequenceMatcher _screenJumpMatcher = new();
+    private readonly SequenceMatcher _savePositionMatcher = new();
+    private readonly SequenceMatcher _recallPositionMatcher = new();
     private readonly HashSet<int> _heldKeys = [];
     private readonly HashSet<int> _suppressedShortcutKeys = [];
     private readonly ScreenOverlayMap _overlayMap;
     private readonly MouseEventRecorder _mouseEventRecorder;
-    private readonly DispatcherTimer _scaleAnimationTimer;
+    private readonly MouseMoveInjector _mouseMoveInjector;
+    private readonly LowLevelHookHost _hookHost;
 
-    private nint _keyboardHook;
-    private nint _mouseHook;
+    private DispatcherTimer? _scaleAnimationTimer;
+    private InputSettings _inputSettings;
+    private IReadOnlyList<DisplayMonitor> _displaySnapshot;
     private NineGridSession? _gestureSession;
     private int? _screenJumpReleaseKey;
+    private PositionCommand _pendingPositionCommand;
+    private long _pendingPositionCommandAt;
     private bool _suppressLeftButtonUp;
     private bool _suppressRightButtonUp;
     private bool _suppressMiddleButtonUp;
     private bool _suppressXButtonUp;
     private NineGridPreview? _queuedPreview;
-    private bool _previewRenderQueued;
+    private int _previewRenderQueued;
     private long _lastMoveDiagnosticAt;
     private Point? _lastObservedCursorPosition;
     private ModeHudWindow? _hud;
-    private bool _disposed;
+    private int _isCapturingKey;
+    private int _jumpActive;
+    private volatile bool _disposed;
 
     public GlobalInputEngine(AppSettings settings, Dispatcher dispatcher)
     {
@@ -44,69 +87,58 @@ public sealed class GlobalInputEngine : IDisposable
         _keyboardCallback = KeyboardHookCallback;
         _mouseCallback = MouseHookCallback;
         _overlayMap = new ScreenOverlayMap(dispatcher);
+        _displaySnapshot = _overlayMap.Displays.ToArray();
+        _overlayMap.DisplaysChanged += OverlayMapOnDisplaysChanged;
         _mouseEventRecorder = new MouseEventRecorder();
-        _scaleAnimationTimer = new DispatcherTimer(
-            DispatcherPriority.Render,
-            dispatcher)
-        {
-            Interval = TimeSpan.FromMilliseconds(16)
-        };
-        _scaleAnimationTimer.Tick += ScaleAnimationTimerOnTick;
+        _mouseMoveInjector = new MouseMoveInjector();
+        _hookHost = new LowLevelHookHost(
+            _keyboardCallback,
+            _mouseCallback);
+        _inputSettings = InputSettings.From(settings);
         _settings.PropertyChanged += SettingsOnPropertyChanged;
     }
 
     public event Action<bool>? JumpStateChanged;
 
-    public bool JumpActive => _gestureSession is not null;
-    public bool IsCapturingKey { get; set; }
+    public bool JumpActive => Volatile.Read(ref _jumpActive) != 0;
+    public bool IsCapturingKey
+    {
+        get => Volatile.Read(ref _isCapturingKey) != 0;
+        set => Volatile.Write(ref _isCapturingKey, value ? 1 : 0);
+    }
 
     public void Start()
     {
-        if (_keyboardHook != 0)
-        {
-            return;
-        }
-
         DiagnosticLog("ENGINE STARTING");
-        var module = NativeMethods.GetModuleHandle(null);
-        _keyboardHook = NativeMethods.SetWindowsHookEx(
-            NativeMethods.WhKeyboardLl,
-            _keyboardCallback,
-            module,
-            0);
-        if (_keyboardHook == 0)
+        _hookHost.Start();
+        _scaleAnimationTimer = new DispatcherTimer(
+            DispatcherPriority.Background,
+            _hookHost.Dispatcher)
         {
-            throw new InvalidOperationException(
-                $"Could not install the keyboard hook (Win32 error {Marshal.GetLastWin32Error()}).");
-        }
-
-        _mouseHook = NativeMethods.SetWindowsHookEx(
-            NativeMethods.WhMouseLl,
-            _mouseCallback,
-            module,
-            0);
-        if (_mouseHook == 0)
-        {
-            NativeMethods.UnhookWindowsHookEx(_keyboardHook);
-            _keyboardHook = 0;
-            throw new InvalidOperationException(
-                $"Could not install the mouse hook (Win32 error {Marshal.GetLastWin32Error()}).");
-        }
+            Interval = TimeSpan.FromMilliseconds(16)
+        };
+        _scaleAnimationTimer.Tick += ScaleAnimationTimerOnTick;
         DiagnosticLog("ENGINE STARTED");
     }
 
     public void PrepareForShortcutCapture()
     {
-        CancelGesture(restoreOrigin: true, showFeedback: false);
-        _screenJumpMatcher.Reset();
-        _suppressedShortcutKeys.Clear();
+        _hookHost.Post(
+            () =>
+            {
+                CancelGesture(restoreOrigin: true, showFeedback: false);
+                _screenJumpMatcher.Reset();
+                ResetPositionShortcuts();
+                _suppressedShortcutKeys.Clear();
+            },
+            DispatcherPriority.Send);
     }
 
     private nint KeyboardHookCallback(int code, nint wParam, nint lParam)
     {
         if (code < 0)
         {
-            return NativeMethods.CallNextHookEx(_keyboardHook, code, wParam, lParam);
+            return NativeMethods.CallNextHookEx(0, code, wParam, lParam);
         }
 
         try
@@ -116,7 +148,7 @@ public sealed class GlobalInputEngine : IDisposable
             var isUp = message is NativeMethods.WmKeyUp or NativeMethods.WmSysKeyUp;
             if (!isDown && !isUp)
             {
-                return NativeMethods.CallNextHookEx(_keyboardHook, code, wParam, lParam);
+                return NativeMethods.CallNextHookEx(0, code, wParam, lParam);
             }
 
             var data = Marshal.PtrToStructure<NativeMethods.KeyboardHookData>(lParam);
@@ -130,17 +162,17 @@ public sealed class GlobalInputEngine : IDisposable
         }
         catch
         {
-            // Input hooks always fail open.
+            FailOpen();
         }
 
-        return NativeMethods.CallNextHookEx(_keyboardHook, code, wParam, lParam);
+        return NativeMethods.CallNextHookEx(0, code, wParam, lParam);
     }
 
     private nint MouseHookCallback(int code, nint wParam, nint lParam)
     {
         if (code < 0)
         {
-            return NativeMethods.CallNextHookEx(_mouseHook, code, wParam, lParam);
+            return NativeMethods.CallNextHookEx(0, code, wParam, lParam);
         }
 
         try
@@ -150,12 +182,18 @@ public sealed class GlobalInputEngine : IDisposable
                 Marshal.PtrToStructure<NativeMethods.MouseHookData>(lParam);
             var isInjected =
                 (hookData.Flags & NativeMethods.LlmhfInjected) != 0;
+            var isOwnInjection = isInjected
+                && hookData.ExtraInfo == NativeMethods.MouseInjectionMarker;
             var hookPosition = new Point(
                 hookData.Position.X,
                 hookData.Position.Y);
             if (isInjected && message == NativeMethods.WmMouseMove)
             {
                 _lastObservedCursorPosition = hookPosition;
+                if (!isOwnInjection)
+                {
+                    _mouseMoveInjector.ObservePosition(hookPosition);
+                }
             }
             if (_gestureSession is not null)
             {
@@ -174,24 +212,30 @@ public sealed class GlobalInputEngine : IDisposable
                         if (isInjected)
                         {
                             return NativeMethods.CallNextHookEx(
-                                _mouseHook,
+                                0,
                                 code,
                                 wParam,
                                 lParam);
                         }
 
-                        var position = hookPosition;
-                        var current = _gestureSession.CurrentPosition;
-                        var rawDeltaX = position.X - current.X;
-                        var rawDeltaY = position.Y - current.Y;
+                        if (_mouseMoveInjector.IsInjecting)
+                        {
+                            return 1;
+                        }
+
+                        var physicalDelta =
+                            _mouseMoveInjector.PhysicalDeltaFrom(
+                                hookPosition);
+                        var rawDeltaX = physicalDelta.X;
+                        var rawDeltaY = physicalDelta.Y;
+                        var inputSettings = Volatile.Read(ref _inputSettings);
                         var interaction = _gestureSession.MoveContinuous(
                             rawDeltaX,
                             rawDeltaY,
-                            _settings.SelectionDistance);
+                            inputSettings.SelectionDistance);
                         if (interaction.JumpTarget is Point target)
                         {
-                            SendAbsoluteMouseMove(target);
-                            _lastObservedCursorPosition = target;
+                            _mouseMoveInjector.Queue(target);
                             RecordMouseEvent(
                                 target,
                                 "move",
@@ -201,8 +245,8 @@ public sealed class GlobalInputEngine : IDisposable
                         }
                         QueuePreview(interaction.Preview);
                         LogContinuousMove(
-                            position.X - current.X,
-                            position.Y - current.Y,
+                            rawDeltaX,
+                            rawDeltaY,
                             interaction.Preview);
                         return 1;
                     }
@@ -295,10 +339,37 @@ public sealed class GlobalInputEngine : IDisposable
         }
         catch
         {
-            // Mouse input remains available if preview rendering fails.
+            FailOpen();
         }
 
-        return NativeMethods.CallNextHookEx(_mouseHook, code, wParam, lParam);
+        return NativeMethods.CallNextHookEx(0, code, wParam, lParam);
+    }
+
+    private void FailOpen()
+    {
+        _gestureSession = null;
+        _screenJumpReleaseKey = null;
+        _screenJumpMatcher.Reset();
+        ResetPositionShortcuts();
+        _suppressedShortcutKeys.Clear();
+        _suppressLeftButtonUp = false;
+        _suppressRightButtonUp = false;
+        _suppressMiddleButtonUp = false;
+        _suppressXButtonUp = false;
+        _scaleAnimationTimer?.Stop();
+        Volatile.Write(ref _jumpActive, 0);
+        Interlocked.Exchange(ref _queuedPreview, null);
+        try
+        {
+            _dispatcher.BeginInvoke(
+                _overlayMap.HideAll,
+                DispatcherPriority.Send);
+            NotifyJumpStateChanged(false);
+        }
+        catch
+        {
+            // Shutdown can dispose the UI dispatcher while a hook is returning.
+        }
     }
 
     private void RecordMouseHookEvent(
@@ -355,7 +426,7 @@ public sealed class GlobalInputEngine : IDisposable
         int rawDeltaX = 0,
         int rawDeltaY = 0)
     {
-        if (_settings.RecordMouseEvents)
+        if (Volatile.Read(ref _inputSettings).RecordMouseEvents)
         {
             _mouseEventRecorder.Record(
                 position,
@@ -417,23 +488,32 @@ public sealed class GlobalInputEngine : IDisposable
             return false;
         }
 
-        if (!firstKeyDown || !_settings.Enabled)
+        var inputSettings = Volatile.Read(ref _inputSettings);
+        if (!firstKeyDown || !inputSettings.Enabled)
         {
             return false;
         }
 
+        if (inputSettings.PositionMarksEnabled
+            && TryProcessPositionShortcut(
+            virtualKey,
+            inputSettings,
+            out var suppressPositionKey))
+        {
+            return suppressPositionKey;
+        }
+
         var progress = _screenJumpMatcher.Consume(
             virtualKey,
-            _settings.ScreenJumpSequence
-                .Select(token => token.VirtualKey)
-                .ToList(),
-            TimeSpan.FromSeconds(_settings.SequenceTimeoutSeconds));
+            inputSettings.ScreenJumpSequence,
+            TimeSpan.FromSeconds(inputSettings.SequenceTimeoutSeconds));
         if (progress is MatchProgress.None or MatchProgress.Prefix)
         {
             return false;
         }
 
         DiagnosticLog($"SEQUENCE MATCH final={virtualKey}");
+        ResetPositionShortcuts();
         BeginGesture(finalKey: virtualKey);
         var suppressActivation =
             ShortcutPolicy.ShouldSuppressActivationKey(virtualKey);
@@ -444,6 +524,120 @@ public sealed class GlobalInputEngine : IDisposable
         return suppressActivation;
     }
 
+    private bool TryProcessPositionShortcut(
+        int virtualKey,
+        InputSettings inputSettings,
+        out bool suppressKey)
+    {
+        suppressKey = false;
+        var now = Stopwatch.GetTimestamp();
+        var timeout = TimeSpan.FromSeconds(
+            inputSettings.SequenceTimeoutSeconds);
+
+        if (_pendingPositionCommand != PositionCommand.None)
+        {
+            var elapsed = (now - _pendingPositionCommandAt)
+                / (double)Stopwatch.Frequency;
+            var pendingCommand = _pendingPositionCommand;
+            _pendingPositionCommand = PositionCommand.None;
+            _pendingPositionCommandAt = 0;
+
+            if (elapsed <= timeout.TotalSeconds
+                && MousePositionRegisters.TryGetRegister(
+                    virtualKey,
+                    out var register))
+            {
+                ExecutePositionCommand(pendingCommand, register);
+                suppressKey = ShortcutPolicy.ShouldSuppressActivationKey(
+                    virtualKey);
+                if (suppressKey)
+                {
+                    _suppressedShortcutKeys.Add(virtualKey);
+                }
+                return true;
+            }
+        }
+
+        var saveProgress = _savePositionMatcher.Consume(
+            virtualKey,
+            inputSettings.SavePositionSequence,
+            timeout,
+            now);
+        var recallProgress = _recallPositionMatcher.Consume(
+            virtualKey,
+            inputSettings.RecallPositionSequence,
+            timeout,
+            now);
+        var command = saveProgress == MatchProgress.Complete
+            ? PositionCommand.Save
+            : recallProgress == MatchProgress.Complete
+                ? PositionCommand.Recall
+                : PositionCommand.None;
+        if (command == PositionCommand.None)
+        {
+            return false;
+        }
+
+        _pendingPositionCommand = command;
+        _pendingPositionCommandAt = now;
+        _screenJumpMatcher.Reset();
+        _savePositionMatcher.Reset();
+        _recallPositionMatcher.Reset();
+        suppressKey = ShortcutPolicy.ShouldSuppressActivationKey(virtualKey);
+        if (suppressKey)
+        {
+            _suppressedShortcutKeys.Add(virtualKey);
+        }
+        DiagnosticLog($"POSITION PREFIX command={command}");
+        return true;
+    }
+
+    private void ExecutePositionCommand(PositionCommand command, char register)
+    {
+        if (command == PositionCommand.Save)
+        {
+            if (!NativeMethods.GetCursorPos(out var cursor))
+            {
+                QueueCompletion($"MARK {register} NOT SAVED", HudTone.Inactive);
+                return;
+            }
+
+            _settings.SaveMousePosition(register, cursor.X, cursor.Y);
+            DiagnosticLog($"POSITION SAVE register={register} point={cursor.X},{cursor.Y}");
+            QueueCompletion($"MARK {register}  ·  SAVED");
+            return;
+        }
+
+        if (!_settings.TryGetSavedMousePosition(register, out var saved))
+        {
+            DiagnosticLog($"POSITION EMPTY register={register}");
+            QueueCompletion($"MARK {register}  ·  EMPTY", HudTone.Inactive);
+            return;
+        }
+
+        var destination = MousePositionRegisters.ResolveDestination(
+            new Point(saved.X, saved.Y),
+            Volatile.Read(ref _displaySnapshot));
+        _mouseMoveInjector.Queue(destination);
+        RecordMouseEvent(
+            destination,
+            "mark_jump",
+            jumping: false,
+            rawDeltaX: 0,
+            rawDeltaY: 0);
+        DiagnosticLog(
+            $"POSITION RECALL register={register} point={destination.X},{destination.Y}");
+        QueueCompletion($"MARK {register}  ·  JUMP");
+    }
+
+    private void ResetPositionShortcuts()
+    {
+        _savePositionMatcher.Reset();
+        _recallPositionMatcher.Reset();
+        _pendingPositionCommand = PositionCommand.None;
+        _pendingPositionCommandAt = 0;
+    }
+
     private void BeginGesture(int finalKey)
     {
         if (!NativeMethods.GetCursorPos(out var cursor))
@@ -451,7 +645,7 @@ public sealed class GlobalInputEngine : IDisposable
             return;
         }
 
-        var displays = _overlayMap.Displays;
+        var displays = Volatile.Read(ref _displaySnapshot);
         if (displays.Count == 0)
         {
             return;
@@ -462,11 +656,14 @@ public sealed class GlobalInputEngine : IDisposable
             displays);
         _lastObservedCursorPosition =
             new Point(cursor.X, cursor.Y);
+        _mouseMoveInjector.ObservePosition(
+            new Point(cursor.X, cursor.Y));
         _screenJumpReleaseKey = finalKey;
+        Volatile.Write(ref _jumpActive, 1);
         DiagnosticLog(
             $"BEGIN origin={cursor.X},{cursor.Y} release={finalKey} displays={displays.Count}");
         QueuePreview(_gestureSession.Preview);
-        JumpStateChanged?.Invoke(true);
+        NotifyJumpStateChanged(true);
     }
 
     private void LogContinuousMove(
@@ -495,7 +692,7 @@ public sealed class GlobalInputEngine : IDisposable
 
         var interaction = wheelDelta > 0
             ? _gestureSession.ZoomIn(
-                _settings.MaximumZoomLevel,
+                Volatile.Read(ref _inputSettings).MaximumZoomLevel,
                 actualPosition)
             : _gestureSession.ZoomOut(
                 actualPosition);
@@ -503,7 +700,7 @@ public sealed class GlobalInputEngine : IDisposable
         DiagnosticLog(
             $"WHEEL delta={wheelDelta} depth={preview.Depth} scale={preview.MapScale:F2} position={preview.ActualCursor.X},{preview.ActualCursor.Y}");
         QueuePreview(preview);
-        _scaleAnimationTimer.Start();
+        _scaleAnimationTimer?.Start();
     }
 
     private void ScaleAnimationTimerOnTick(
@@ -512,39 +709,53 @@ public sealed class GlobalInputEngine : IDisposable
     {
         if (_gestureSession is null)
         {
-            _scaleAnimationTimer.Stop();
+            _scaleAnimationTimer?.Stop();
             return;
         }
 
         QueuePreview(_gestureSession.RefreshScale());
         if (!_gestureSession.IsScaleAnimating)
         {
-            _scaleAnimationTimer.Stop();
+            _scaleAnimationTimer?.Stop();
         }
     }
 
     private void QueuePreview(NineGridPreview preview)
     {
-        _queuedPreview = preview;
-        if (_previewRenderQueued)
+        if (_disposed)
         {
             return;
         }
 
-        _previewRenderQueued = true;
-        _dispatcher.BeginInvoke(
-            () =>
-            {
-                _previewRenderQueued = false;
-                var queued = _queuedPreview;
-                if (_gestureSession is null || queued is null)
-                {
-                    return;
-                }
+        Volatile.Write(ref _queuedPreview, preview);
+        if (Interlocked.Exchange(ref _previewRenderQueued, 1) != 0)
+        {
+            return;
+        }
 
-                _overlayMap.ShowPreview(queued);
-            },
+        _dispatcher.BeginInvoke(
+            RenderQueuedPreview,
             DispatcherPriority.Render);
+    }
+
+    private void RenderQueuedPreview()
+    {
+        var queued = Interlocked.Exchange(ref _queuedPreview, null);
+        Interlocked.Exchange(ref _previewRenderQueued, 0);
+        if (!_disposed && JumpActive && queued is not null)
+        {
+            _overlayMap.ShowPreview(queued);
+        }
+
+        if (
+            Volatile.Read(ref _queuedPreview) is not null
+            && Interlocked.Exchange(ref _previewRenderQueued, 1) == 0
+        )
+        {
+            _dispatcher.BeginInvoke(
+                RenderQueuedPreview,
+                DispatcherPriority.Render);
+        }
     }
 
     private void ConfirmGesture()
@@ -559,7 +770,7 @@ public sealed class GlobalInputEngine : IDisposable
         DiagnosticLog(
             $"KEEP screen={preview.Display.Number} depth={preview.Depth} destination={destination.X},{destination.Y}");
         EndGesture();
-        ShowCompletion($"KEEP  ·  LEVEL {preview.Depth}");
+        QueueCompletion($"KEEP  ·  LEVEL {preview.Depth}");
     }
 
     private void CancelGesture(bool restoreOrigin, bool showFeedback)
@@ -574,11 +785,11 @@ public sealed class GlobalInputEngine : IDisposable
         EndGesture();
         if (restoreOrigin)
         {
-            SendAbsoluteMouseMove(origin);
+            _mouseMoveInjector.Queue(origin);
         }
         if (showFeedback)
         {
-            ShowCompletion("CANCELLED", HudTone.Inactive);
+            QueueCompletion("CANCELLED", HudTone.Inactive);
         }
     }
 
@@ -586,15 +797,34 @@ public sealed class GlobalInputEngine : IDisposable
     {
         _gestureSession = null;
         _screenJumpReleaseKey = null;
-        _scaleAnimationTimer.Stop();
-        _queuedPreview = null;
+        _scaleAnimationTimer?.Stop();
+        Volatile.Write(ref _jumpActive, 0);
+        Interlocked.Exchange(ref _queuedPreview, null);
         _dispatcher.BeginInvoke(
             _overlayMap.HideAll,
             DispatcherPriority.Render);
-        JumpStateChanged?.Invoke(false);
+        NotifyJumpStateChanged(false);
     }
 
-    private void ShowCompletion(string message, HudTone tone = HudTone.Active)
+    private void QueueCompletion(string message, HudTone tone = HudTone.Active)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _dispatcher.BeginInvoke(
+            () =>
+            {
+                if (!_disposed)
+                {
+                    ShowCompletion(message, tone);
+                }
+            },
+            DispatcherPriority.Background);
+    }
+
+    private void ShowCompletion(string message, HudTone tone)
     {
         if (!_settings.ShowStatusHud)
         {
@@ -605,95 +835,80 @@ public sealed class GlobalInputEngine : IDisposable
         _hud.ShowMessage(message, tone, hideAfterMilliseconds: 800);
     }
 
-    private void SendAbsoluteMouseMove(Point target)
+    private void NotifyJumpStateChanged(bool active)
     {
-        var left = NativeMethods.GetSystemMetrics(NativeMethods.SmXVirtualScreen);
-        var top = NativeMethods.GetSystemMetrics(NativeMethods.SmYVirtualScreen);
-        var width = Math.Max(
-            NativeMethods.GetSystemMetrics(NativeMethods.SmCxVirtualScreen),
-            2);
-        var height = Math.Max(
-            NativeMethods.GetSystemMetrics(NativeMethods.SmCyVirtualScreen),
-            2);
-
-        var normalizedX = (int)Math.Round(
-            (target.X - left) * 65_535d / (width - 1));
-        var normalizedY = (int)Math.Round(
-            (target.Y - top) * 65_535d / (height - 1));
-        var input = new NativeMethods.Input
-        {
-            Type = NativeMethods.InputMouse,
-            Data = new NativeMethods.InputUnion
-            {
-                Mouse = new NativeMethods.MouseInput
-                {
-                    X = Math.Clamp(normalizedX, 0, 65_535),
-                    Y = Math.Clamp(normalizedY, 0, 65_535),
-                    Flags = NativeMethods.MouseEventMove
-                        | NativeMethods.MouseEventMoveNoCoalesce
-                        | NativeMethods.MouseEventAbsolute
-                        | NativeMethods.MouseEventVirtualDesk
-                }
-            }
-        };
-
-        var sent = NativeMethods.SendInput(
-            1,
-            [input],
-            Marshal.SizeOf<NativeMethods.Input>());
-        DiagnosticLog(
-            $"SEND_INPUT sent={sent} target={target.X},{target.Y} error={Marshal.GetLastWin32Error()}");
-        if (sent == 0)
-        {
-            _dispatcher.BeginInvoke(
-                () => NativeMethods.SetCursorPos(target.X, target.Y),
-                DispatcherPriority.Input);
-        }
-    }
-
-    private void SettingsOnPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        switch (e.PropertyName)
-        {
-            case nameof(AppSettings.Enabled):
-                if (!_settings.Enabled)
-                {
-                    CancelGesture(restoreOrigin: true, showFeedback: false);
-                }
-                break;
-            case nameof(AppSettings.ScreenJumpSequence):
-            case nameof(AppSettings.SequenceTimeoutSeconds):
-                _screenJumpMatcher.Reset();
-                CancelGesture(restoreOrigin: true, showFeedback: false);
-                break;
-            case nameof(AppSettings.ShowStatusHud):
-                if (!_settings.ShowStatusHud)
-                {
-                    _hud?.Hide();
-                }
-                break;
-        }
-    }
-
-    private static void DiagnosticLog(string message)
-    {
-        var path = Environment.GetEnvironmentVariable(
-            "MOUSE_ACCELERATOR_DIAGNOSTIC_LOG");
-        if (string.IsNullOrWhiteSpace(path))
+        if (_disposed)
         {
             return;
         }
 
-        try
+        _dispatcher.BeginInvoke(
+            () =>
+            {
+                if (!_disposed)
+                {
+                    JumpStateChanged?.Invoke(active);
+                }
+            },
+            DispatcherPriority.Background);
+    }
+
+    private void SettingsOnPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        var inputSettings = InputSettings.From(_settings);
+        Volatile.Write(ref _inputSettings, inputSettings);
+        var propertyName = e.PropertyName;
+
+        if (propertyName == nameof(AppSettings.ShowStatusHud))
         {
-            File.AppendAllText(
-                path,
-                $"{DateTime.UtcNow:O} {message}{Environment.NewLine}");
+            if (!_settings.ShowStatusHud)
+            {
+                _hud?.Hide();
+            }
+            return;
         }
-        catch
+
+        if (
+            propertyName == nameof(AppSettings.Enabled)
+            || propertyName == nameof(AppSettings.PositionMarksEnabled)
+            || propertyName == nameof(AppSettings.ScreenJumpSequence)
+            || propertyName == nameof(AppSettings.SavePositionSequence)
+            || propertyName == nameof(AppSettings.RecallPositionSequence)
+            || propertyName == nameof(AppSettings.SequenceTimeoutSeconds)
+        )
         {
-            // Diagnostics must never interfere with input.
+            _hookHost.Post(
+                () =>
+                {
+                    _screenJumpMatcher.Reset();
+                    ResetPositionShortcuts();
+                    if (!inputSettings.Enabled
+                        || propertyName != nameof(AppSettings.Enabled))
+                    {
+                        CancelGesture(
+                            restoreOrigin: true,
+                            showFeedback: false);
+                    }
+                },
+                DispatcherPriority.Send);
         }
+    }
+
+    private void OverlayMapOnDisplaysChanged(
+        IReadOnlyList<DisplayMonitor> displays)
+    {
+        Volatile.Write(ref _displaySnapshot, displays.ToArray());
+        _hookHost.Post(
+            () => CancelGesture(
+                restoreOrigin: false,
+                showFeedback: false),
+            DispatcherPriority.Send);
+    }
+
+    [Conditional("DEBUG")]
+    private static void DiagnosticLog(string message)
+    {
+        Debug.WriteLine(message, "PrecisionJump.Input");
     }
 
     public void Dispose()
@@ -705,18 +920,10 @@ public sealed class GlobalInputEngine : IDisposable
 
         _disposed = true;
         _settings.PropertyChanged -= SettingsOnPropertyChanged;
-        CancelGesture(restoreOrigin: true, showFeedback: false);
-
-        if (_keyboardHook != 0)
-        {
-            NativeMethods.UnhookWindowsHookEx(_keyboardHook);
-            _keyboardHook = 0;
-        }
-        if (_mouseHook != 0)
-        {
-            NativeMethods.UnhookWindowsHookEx(_mouseHook);
-            _mouseHook = 0;
-        }
+        _overlayMap.DisplaysChanged -= OverlayMapOnDisplaysChanged;
+        Volatile.Write(ref _jumpActive, 0);
+        _hookHost.Dispose();
+        _mouseMoveInjector.Dispose();
 
         _overlayMap.Dispose();
         _mouseEventRecorder.Dispose();

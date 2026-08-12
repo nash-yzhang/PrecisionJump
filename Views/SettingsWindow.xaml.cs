@@ -3,15 +3,28 @@ using System.Windows;
 using System.Windows.Input;
 using MouseAccelerator.Models;
 using MouseAccelerator.Services;
+using Binding = System.Windows.Data.Binding;
+using Button = System.Windows.Controls.Button;
+using TextBlock = System.Windows.Controls.TextBlock;
 
 namespace MouseAccelerator.Views;
 
 public partial class SettingsWindow : Window
 {
+    private enum ShortcutTarget
+    {
+        ScreenJump,
+        SavePosition,
+        RecallPosition
+    }
+
     private readonly AppSettings _settings;
     private readonly GlobalInputEngine _inputEngine;
     private readonly List<KeyToken> _recordedSequence = [];
-    private bool _recording;
+    private ShortcutTarget? _recordingTarget;
+    private Button? _recordingButton;
+    private TextBlock? _recordingDisplay;
+    private int _recordingLimit;
 
     public SettingsWindow(AppSettings settings, GlobalInputEngine inputEngine)
     {
@@ -29,24 +42,59 @@ public partial class SettingsWindow : Window
 
     private void RecordScreenJump_Click(object sender, RoutedEventArgs e)
     {
-        if (_recording)
+        ToggleRecording(
+            ShortcutTarget.ScreenJump,
+            RecordScreenJumpButton,
+            ScreenJumpDisplay,
+            limit: 3);
+    }
+
+    private void RecordSavePosition_Click(object sender, RoutedEventArgs e)
+    {
+        ToggleRecording(
+            ShortcutTarget.SavePosition,
+            RecordSavePositionButton,
+            SavePositionDisplay,
+            limit: 2);
+    }
+
+    private void RecordRecallPosition_Click(object sender, RoutedEventArgs e)
+    {
+        ToggleRecording(
+            ShortcutTarget.RecallPosition,
+            RecordRecallPositionButton,
+            RecallPositionDisplay,
+            limit: 2);
+    }
+
+    private void ToggleRecording(
+        ShortcutTarget target,
+        Button button,
+        TextBlock display,
+        int limit)
+    {
+        if (_recordingTarget == target)
         {
             FinishRecording(apply: true);
             return;
         }
 
+        FinishRecording(apply: false);
         _inputEngine.PrepareForShortcutCapture();
         _inputEngine.IsCapturingKey = true;
         _recordedSequence.Clear();
-        _recording = true;
-        RecordScreenJumpButton.Content = "Done";
-        ScreenJumpDisplay.Text = "Press 1–3 keys…";
+        _recordingTarget = target;
+        _recordingButton = button;
+        _recordingDisplay = display;
+        _recordingLimit = limit;
+        button.Content = "Done";
+        display.Text = limit == 2 ? "Press up to 2 keys…" : "Press 1–3 keys…";
         Focus();
     }
 
     private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
-        if (!_recording)
+        if (_recordingTarget is null)
         {
             return;
         }
@@ -70,11 +118,11 @@ public partial class SettingsWindow : Window
         }
 
         _recordedSequence.Add(new KeyToken(virtualKey));
-        ScreenJumpDisplay.Text = string.Join(
+        _recordingDisplay!.Text = string.Join(
             "  →  ",
             _recordedSequence.Select(token => token.DisplayName));
 
-        if (_recordedSequence.Count >= 3)
+        if (_recordedSequence.Count >= _recordingLimit)
         {
             FinishRecording(apply: true);
         }
@@ -82,22 +130,45 @@ public partial class SettingsWindow : Window
 
     private void FinishRecording(bool apply)
     {
-        if (!_recording)
+        if (_recordingTarget is not ShortcutTarget target)
         {
             return;
         }
 
         if (apply && _recordedSequence.Count > 0)
         {
-            _settings.ScreenJumpSequence = _recordedSequence.ToList();
+            switch (target)
+            {
+                case ShortcutTarget.ScreenJump:
+                    _settings.ScreenJumpSequence = _recordedSequence.ToList();
+                    break;
+                case ShortcutTarget.SavePosition:
+                    _settings.SavePositionSequence = _recordedSequence.ToList();
+                    break;
+                case ShortcutTarget.RecallPosition:
+                    _settings.RecallPositionSequence = _recordedSequence.ToList();
+                    break;
+            }
         }
 
-        _recording = false;
+        var button = _recordingButton!;
+        var display = _recordingDisplay!;
+        _recordingTarget = null;
+        _recordingButton = null;
+        _recordingDisplay = null;
+        _recordingLimit = 0;
         _inputEngine.IsCapturingKey = false;
-        RecordScreenJumpButton.Content = "Record";
-        ScreenJumpDisplay.SetBinding(
-            System.Windows.Controls.TextBlock.TextProperty,
-            new System.Windows.Data.Binding(nameof(AppSettings.ScreenJumpDisplay)));
+        button.Content = "Record";
+        var propertyName = target switch
+        {
+            ShortcutTarget.ScreenJump => nameof(AppSettings.ScreenJumpDisplay),
+            ShortcutTarget.SavePosition => nameof(AppSettings.SavePositionDisplay),
+            ShortcutTarget.RecallPosition => nameof(AppSettings.RecallPositionDisplay),
+            _ => throw new ArgumentOutOfRangeException()
+        };
+        display.SetBinding(
+            TextBlock.TextProperty,
+            new Binding(propertyName));
     }
 
     private void RestoreDefaults_Click(object sender, RoutedEventArgs e)
@@ -106,9 +177,35 @@ public partial class SettingsWindow : Window
         _settings.RestoreDefaults();
     }
 
+    private void ClearSavedPositions_Click(object sender, RoutedEventArgs e)
+    {
+        if (_settings.SavedPositionCount == 0)
+        {
+            return;
+        }
+
+        var result = System.Windows.MessageBox.Show(
+            "Clear all saved pointer positions? This cannot be undone.",
+            "Precision Jump",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+        if (result == MessageBoxResult.Yes)
+        {
+            _settings.ClearSavedMousePositions();
+        }
+    }
+
     private void InputEngineOnJumpStateChanged(bool _)
     {
-        Dispatcher.Invoke(UpdateStatus);
+        if (Dispatcher.CheckAccess())
+        {
+            UpdateStatus();
+        }
+        else
+        {
+            Dispatcher.BeginInvoke(UpdateStatus);
+        }
     }
 
     private void SettingsOnPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -133,7 +230,7 @@ public partial class SettingsWindow : Window
 
     private void Window_Closed(object? sender, EventArgs e)
     {
-        _recording = false;
+        FinishRecording(apply: false);
         _inputEngine.IsCapturingKey = false;
         _inputEngine.JumpStateChanged -= InputEngineOnJumpStateChanged;
         _settings.PropertyChanged -= SettingsOnPropertyChanged;

@@ -13,6 +13,13 @@ only while active and does not change Windows mouse settings.
 4. Scroll down to zoom out for fast, accelerated travel.
 5. Release the shortcut to keep the pointer position.
 
+Pointer positions can also be stored in Vim-style registers. Press the save
+prefix (`Ctrl`, `M` by default), followed by `A`–`Z` or `0`–`9`. Press the jump
+prefix (`Ctrl`, `G` by default), followed by the same register, to return. Both
+prefixes are configurable in Settings, and saved positions persist across app
+restarts. If a saved display is no longer connected, the destination is
+clamped to the nearest available display.
+
 At the coarsest scale, displays are connected through a simplified
 eight-direction topology. Zoomed movement uses their real Windows positions,
 sizes, alignment, and gaps. Scaling is animated and never moves the pointer by
@@ -29,10 +36,15 @@ position.
 - Eight-direction display topology at the coarsest scale
 - Actual Windows display geometry while zoomed
 - One-to-three-key activation sequences, including held-key combinations
+- Persistent A–Z and 0–9 pointer-position registers with configurable prefixes
 - Configurable map response, maximum zoom depth, and status HUD
 - Optional mouse movement and click recording to CSV
-- Optional automatic startup with Windows
 - Lightweight tray interface with no virtual cursor
+
+Low-level keyboard and mouse hooks run on a dedicated message thread. Hook
+callbacks never render UI, write files, or call `SendInput`; mouse injection
+and UI updates are handed off to separate workers, and callback failures reset
+the active gesture so input fails open.
 
 ## Optional event recording
 
@@ -57,9 +69,6 @@ a bounded background queue so disk writes do not block the input hook.
 effective pointer coordinates, while `raw_dx/raw_dy` capture the input
 displacement. The writer flushes at least every 250 ms or 256 rows, including
 during uninterrupted movement.
-
-Enable **Start with Windows** to launch Precision Jump directly into the tray
-after sign-in.
 
 ## Build
 
