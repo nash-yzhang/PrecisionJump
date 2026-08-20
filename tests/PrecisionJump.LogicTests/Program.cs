@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Drawing;
-using MouseAccelerator.Services;
+using PrecisionJump.Services;
 
 static void Assert(bool condition, string message)
 {
@@ -46,6 +46,106 @@ Assert(
 Assert(
     screenSession.Origin == new Point(960, 540),
     "Movement must preserve the activation origin for cancellation.");
+
+var gappedSecondary = secondary with
+{
+    Bounds = new Rectangle(2020, 0, 1280, 1024),
+    WorkingArea = new Rectangle(2020, 0, 1280, 984)
+};
+var gapSession = new NineGridSession(
+    new Point(1910, 500),
+    [primary, gappedSecondary]);
+gapSession.ZoomIn(
+    maximumDepth: 3,
+    actualPosition: gapSession.CurrentPosition,
+    nowTicks: tick);
+gapSession.RefreshScale(nowTicks: tick * 2);
+var gapMove = gapSession.MoveContinuous(
+    physicalDeltaX: 1,
+    physicalDeltaY: 0,
+    mapUnitTravelDistance: 26,
+    nowTicks: tick * 3);
+Assert(
+    gapMove.JumpTarget is Point gapTarget
+    && gapMove.Preview.Display == primary
+    && gapTarget == new Point(primary.Bounds.Right - 1, 500),
+    "A display separated by a gap must not be treated as an adjacent display.");
+
+var upperRight = new DisplayMonitor(
+    "UPPER_RIGHT",
+    new Rectangle(1920, 0, 1280, 540),
+    new Rectangle(1920, 0, 1280, 500),
+    IsPrimary: false,
+    Number: 2);
+var lowerRight = new DisplayMonitor(
+    "LOWER_RIGHT",
+    new Rectangle(1920, 540, 1280, 540),
+    new Rectangle(1920, 540, 1280, 500),
+    IsPrimary: false,
+    Number: 3);
+var sideSession = new NineGridSession(
+    new Point(1910, 800),
+    [primary, upperRight, lowerRight]);
+var sideMove = sideSession.MoveContinuous(
+    physicalDeltaX: 2,
+    physicalDeltaY: 0,
+    mapUnitTravelDistance: 26,
+    nowTicks: tick);
+Assert(
+    sideMove.JumpTarget is Point sideTarget
+    && sideMove.Preview.Display == lowerRight
+    && lowerRight.Bounds.Contains(sideTarget),
+    "A side crossing must enter the screen that shares that edge position.");
+
+var forcedAlignmentSession = new NineGridSession(
+    new Point(1910, 800),
+    [primary, upperRight]);
+var forcedAlignmentMove = forcedAlignmentSession.MoveContinuous(
+    physicalDeltaX: 2,
+    physicalDeltaY: 0,
+    mapUnitTravelDistance: 26,
+    nowTicks: tick);
+Assert(
+    forcedAlignmentMove.JumpTarget is Point alignedTarget
+    && forcedAlignmentMove.Preview.Display == upperRight
+    && upperRight.Bounds.Contains(alignedTarget)
+    && alignedTarget.Y == 400,
+    "An unaligned part of a related side must map proportionally instead of blocking movement.");
+
+var lowerDisplay = new DisplayMonitor(
+    "LOWER",
+    new Rectangle(0, 1080, 1600, 900),
+    new Rectangle(0, 1080, 1600, 860),
+    IsPrimary: false,
+    Number: 4);
+var verticalSession = new NineGridSession(
+    new Point(800, 1070),
+    [primary, lowerDisplay]);
+var verticalMove = verticalSession.MoveContinuous(
+    physicalDeltaX: 0,
+    physicalDeltaY: 2,
+    mapUnitTravelDistance: 26,
+    nowTicks: tick);
+Assert(
+    verticalMove.JumpTarget is Point verticalTarget
+    && verticalMove.Preview.Display == lowerDisplay
+    && lowerDisplay.Bounds.Contains(verticalTarget),
+    "A top/bottom shared edge must create a vertical display relationship.");
+
+var forcedVerticalSession = new NineGridSession(
+    new Point(1800, 1070),
+    [primary, lowerDisplay]);
+var forcedVerticalMove = forcedVerticalSession.MoveContinuous(
+    physicalDeltaX: 0,
+    physicalDeltaY: 2,
+    mapUnitTravelDistance: 26,
+    nowTicks: tick);
+Assert(
+    forcedVerticalMove.JumpTarget is Point alignedVerticalTarget
+    && forcedVerticalMove.Preview.Display == lowerDisplay
+    && lowerDisplay.Bounds.Contains(alignedVerticalTarget)
+    && alignedVerticalTarget.X == 1500,
+    "An unaligned top/bottom edge must preserve the normalized horizontal position.");
 
 var zoomOrigin = new Point(1000, 500);
 var zoomSession = new NineGridSession(zoomOrigin, [primary]);
@@ -172,6 +272,7 @@ Assert(
     "A position on a connected display must remain exact.");
 
 Console.WriteLine("CONTINUOUS_SCREEN_MAP=PASSED");
+Console.WriteLine("EDGE_ADJACENT_DISPLAY_MAP=PASSED");
 Console.WriteLine("ANIMATED_ZOOM_SCALE=PASSED");
 Console.WriteLine("POINTER_PRESERVING_ZOOM=PASSED");
 Console.WriteLine("MAXIMUM_REFINEMENT_DEPTH=PASSED");

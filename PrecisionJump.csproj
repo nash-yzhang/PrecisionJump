@@ -7,9 +7,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ApplicationIcon>Assets\MouseAccelerator.ico</ApplicationIcon>
-    <AssemblyName>MouseAccelerator</AssemblyName>
-    <RootNamespace>MouseAccelerator</RootNamespace>
+    <ApplicationIcon>Assets\PrecisionJump.ico</ApplicationIcon>
+    <AssemblyName>PrecisionJump</AssemblyName>
+    <RootNamespace>PrecisionJump</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>

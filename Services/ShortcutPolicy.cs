@@ -1,4 +1,4 @@
-namespace MouseAccelerator.Services;
+namespace PrecisionJump.Services;
 
 internal static class ShortcutPolicy
 {

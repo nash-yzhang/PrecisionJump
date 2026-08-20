@@ -20,10 +20,12 @@ prefixes are configurable in Settings, and saved positions persist across app
 restarts. If a saved display is no longer connected, the destination is
 clamped to the nearest available display.
 
-At the coarsest scale, displays are connected through a simplified
-eight-direction topology. Zoomed movement uses their real Windows positions,
-sizes, alignment, and gaps. Scaling is animated and never moves the pointer by
-itself.
+The display map uses only shared edges. Screens whose left/right edges touch
+are horizontal neighbors, and screens whose top/bottom edges touch are vertical
+neighbors. Gaps and diagonal proximity never create a shortcut that can skip
+another screen. Once two screens are neighbors, their full logical edges are
+aligned so resolution and offset differences do not create dead zones. Scaling
+is animated and never moves the pointer by itself.
 
 The overlay visualizes the current map scale with fixed grid lines and
 distance-based fading. Right-click cancels and restores the activation
@@ -33,8 +35,8 @@ position.
 
 - Continuous movement without cell-center jumps, thresholds, or cooldowns
 - Zoom-based pointer acceleration and precision
-- Eight-direction display topology at the coarsest scale
-- Actual Windows display geometry while zoomed
+- Four-direction display topology based on shared screen edges
+- Consistent adjacent-screen movement at every zoom level
 - One-to-three-key activation sequences, including held-key combinations
 - Persistent A–Z and 0–9 pointer-position registers with configurable prefixes
 - Configurable map response, maximum zoom depth, and status HUD
@@ -52,7 +54,7 @@ Enable **Record mouse movement and clicks to CSV** in Settings to append mouse
 events to:
 
 ```text
-%LOCALAPPDATA%\MouseAccelerator\mouse-events-<session UTC>.csv
+%LOCALAPPDATA%\PrecisionJump\mouse-events-<session UTC>.csv
 ```
 
 Each application session receives a new UTC-timestamped file opened with
@@ -79,8 +81,8 @@ dotnet build -c Release --configfile .\NuGet.Config
 dotnet publish -c Release --no-restore -o publish
 ```
 
-Run `publish\MouseAccelerator.exe`. Settings are stored in:
+Run `publish\PrecisionJump.exe`. Settings are stored in:
 
 ```text
-%LOCALAPPDATA%\MouseAccelerator\settings.json
+%LOCALAPPDATA%\PrecisionJump\settings.json
 ```

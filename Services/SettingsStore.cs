@@ -1,12 +1,17 @@
 using System.ComponentModel;
 using System.IO;
 using System.Text.Json;
-using MouseAccelerator.Models;
+using PrecisionJump.Models;
 
-namespace MouseAccelerator.Services;
+namespace PrecisionJump.Services;
 
 public sealed class SettingsStore : IDisposable
 {
+    private const string SettingsOverrideVariable =
+        "PRECISION_JUMP_SETTINGS_PATH";
+    private const string ProductDirectoryName = "PrecisionJump";
+    private const string LegacyProductDirectoryName = "MouseAccelerator";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -29,11 +34,11 @@ public sealed class SettingsStore : IDisposable
         get
         {
             var overridePath = Environment.GetEnvironmentVariable(
-                "MOUSE_ACCELERATOR_SETTINGS_PATH");
+                SettingsOverrideVariable);
             return string.IsNullOrWhiteSpace(overridePath)
                 ? Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "MouseAccelerator",
+                    ProductDirectoryName,
                     "settings.json")
                 : Path.GetFullPath(overridePath);
         }
@@ -43,12 +48,13 @@ public sealed class SettingsStore : IDisposable
     {
         try
         {
-            if (!File.Exists(SettingsPath))
+            var loadPath = ResolveLoadPath();
+            if (!File.Exists(loadPath))
             {
                 return new AppSettings();
             }
 
-            var json = File.ReadAllText(SettingsPath);
+            var json = File.ReadAllText(loadPath);
             var settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions)
                 ?? new AppSettings();
             settings.Normalize();
@@ -57,6 +63,40 @@ public sealed class SettingsStore : IDisposable
         catch
         {
             return new AppSettings();
+        }
+    }
+
+    private static string ResolveLoadPath()
+    {
+        var settingsPath = SettingsPath;
+        if (File.Exists(settingsPath)
+            || !string.IsNullOrWhiteSpace(
+                Environment.GetEnvironmentVariable(SettingsOverrideVariable)))
+        {
+            return settingsPath;
+        }
+
+        var legacyPath = Path.Combine(
+            Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData),
+            LegacyProductDirectoryName,
+            "settings.json");
+        if (!File.Exists(legacyPath))
+        {
+            return settingsPath;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+            File.Copy(legacyPath, settingsPath, overwrite: false);
+            return settingsPath;
+        }
+        catch
+        {
+            // A read-only legacy file can still seed this session. Any later
+            // setting change is saved under the new PrecisionJump directory.
+            return legacyPath;
         }
     }
 

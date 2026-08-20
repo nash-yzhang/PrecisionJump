@@ -4,7 +4,7 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media.Imaging;
 
-namespace MouseAccelerator.Services;
+namespace PrecisionJump.Services;
 
 public static class AppIconFactory
 {

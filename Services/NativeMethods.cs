@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace MouseAccelerator.Services;
+namespace PrecisionJump.Services;
 
 internal static class NativeMethods
 {
@@ -25,7 +25,6 @@ internal static class NativeMethods
     internal const uint LlmhfInjected = 0x00000001;
     internal const uint InputMouse = 0;
     internal const uint MouseEventMove = 0x0001;
-    internal const uint MouseEventMoveNoCoalesce = 0x2000;
     internal const uint MouseEventAbsolute = 0x8000;
     internal const uint MouseEventVirtualDesk = 0x4000;
     internal static readonly nuint MouseInjectionMarker =
@@ -132,7 +131,7 @@ internal static class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern uint SendInput(
         uint inputCount,
-        [In] Input[] inputs,
+        ref Input input,
         int inputSize);
 
     [DllImport("user32.dll")]

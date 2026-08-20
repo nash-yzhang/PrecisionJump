@@ -4,7 +4,7 @@ using System.Drawing;
 using System.IO;
 using System.Text;
 
-namespace MouseAccelerator.Services;
+namespace PrecisionJump.Services;
 
 public sealed class MouseEventRecorder : IDisposable
 {
@@ -42,7 +42,7 @@ public sealed class MouseEventRecorder : IDisposable
         get
         {
             var overridePath = Environment.GetEnvironmentVariable(
-                "MOUSE_ACCELERATOR_EVENTS_PATH");
+                "PRECISION_JUMP_EVENTS_PATH");
             if (!string.IsNullOrWhiteSpace(overridePath))
             {
                 var fullPath = Path.GetFullPath(overridePath);
@@ -54,7 +54,7 @@ public sealed class MouseEventRecorder : IDisposable
             return Path.Combine(
                 Environment.GetFolderPath(
                     Environment.SpecialFolder.LocalApplicationData),
-                "MouseAccelerator");
+                "PrecisionJump");
         }
     }
 
@@ -204,7 +204,7 @@ public sealed class MouseEventRecorder : IDisposable
             "yyyyMMdd'T'HHmmss.fff'Z'",
             System.Globalization.CultureInfo.InvariantCulture);
         var overridePath = Environment.GetEnvironmentVariable(
-            "MOUSE_ACCELERATOR_EVENTS_PATH");
+            "PRECISION_JUMP_EVENTS_PATH");
         if (!string.IsNullOrWhiteSpace(overridePath))
         {
             var fullPath = Path.GetFullPath(overridePath);

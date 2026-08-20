@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Windows.Threading;
 
-namespace MouseAccelerator.Services;
+namespace PrecisionJump.Services;
 
 internal sealed class LowLevelHookHost : IDisposable
 {
@@ -25,7 +25,8 @@ internal sealed class LowLevelHookHost : IDisposable
         _thread = new Thread(ThreadMain)
         {
             IsBackground = true,
-            Name = "PrecisionJump.InputHooks"
+            Name = "PrecisionJump.InputHooks",
+            Priority = ThreadPriority.AboveNormal
         };
         _thread.SetApartmentState(ApartmentState.MTA);
     }

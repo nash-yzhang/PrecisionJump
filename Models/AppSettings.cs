@@ -2,7 +2,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 
-namespace MouseAccelerator.Models;
+namespace PrecisionJump.Models;
 
 public sealed class AppSettings : INotifyPropertyChanged
 {

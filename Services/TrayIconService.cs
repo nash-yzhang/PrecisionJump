@@ -1,7 +1,7 @@
 using System.Drawing;
 using Forms = System.Windows.Forms;
 
-namespace MouseAccelerator.Services;
+namespace PrecisionJump.Services;
 
 public sealed class TrayIconService : IDisposable
 {

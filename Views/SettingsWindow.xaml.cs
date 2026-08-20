@@ -1,13 +1,13 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Input;
-using MouseAccelerator.Models;
-using MouseAccelerator.Services;
+using PrecisionJump.Models;
+using PrecisionJump.Services;
 using Binding = System.Windows.Data.Binding;
 using Button = System.Windows.Controls.Button;
 using TextBlock = System.Windows.Controls.TextBlock;
 
-namespace MouseAccelerator.Views;
+namespace PrecisionJump.Views;
 
 public partial class SettingsWindow : Window
 {
@@ -158,7 +158,7 @@ public partial class SettingsWindow : Window
         _recordingDisplay = null;
         _recordingLimit = 0;
         _inputEngine.IsCapturingKey = false;
-        button.Content = "Record";
+        button.Content = "Change";
         var propertyName = target switch
         {
             ShortcutTarget.ScreenJump => nameof(AppSettings.ScreenJumpDisplay),

@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using Forms = System.Windows.Forms;
 
-namespace MouseAccelerator.Services;
+namespace PrecisionJump.Services;
 
 public sealed record DisplayMonitor(
     string DeviceName,
@@ -94,18 +94,9 @@ public sealed class NineGridSession
         }
 
         var travel = Math.Max(mapUnitTravelDistance, 1);
-        if (Depth == 0)
-        {
-            MoveOnDiscreteScreenMap(
-                physicalDeltaX / (travel * _scale),
-                physicalDeltaY / (travel * _scale));
-        }
-        else
-        {
-            MoveOnActualDisplayMap(
-                physicalDeltaX * Display.Bounds.Width / (travel * _scale),
-                physicalDeltaY * Display.Bounds.Height / (travel * _scale));
-        }
+        MoveOnAdjacentDisplayMap(
+            physicalDeltaX / (travel * _scale),
+            physicalDeltaY / (travel * _scale));
 
         Preview = CreatePreview();
         return new GridInteraction(Preview, CurrentPosition);
@@ -161,104 +152,111 @@ public sealed class NineGridSession
         Preview = CreatePreview();
     }
 
-    private void MoveOnDiscreteScreenMap(
+    private void MoveOnAdjacentDisplayMap(
         double normalizedDeltaX,
         double normalizedDeltaY)
     {
         var bounds = Display.Bounds;
         var width = Math.Max(bounds.Width - 1, 1);
         var height = Math.Max(bounds.Height - 1, 1);
-        var u = (_mapX - bounds.Left) / width + normalizedDeltaX;
-        var v = (_mapY - bounds.Top) / height + normalizedDeltaY;
+        var u = Math.Clamp((_mapX - bounds.Left) / width, 0, 1);
+        var v = Math.Clamp((_mapY - bounds.Top) / height, 0, 1);
+        var remainingX = normalizedDeltaX;
+        var remainingY = normalizedDeltaY;
 
-        for (var iteration = 0; iteration < 8; iteration++)
+        var maximumTransitions = Math.Max(_displays.Count * 2, 4);
+        for (var iteration = 0; iteration < maximumTransitions; iteration++)
         {
-            var columnDirection = u < 0 ? -1 : u > 1 ? 1 : 0;
-            var rowDirection = v < 0 ? -1 : v > 1 ? 1 : 0;
-            if (rowDirection == 0 && columnDirection == 0)
+            if (Math.Abs(remainingX) < 0.000001
+                && Math.Abs(remainingY) < 0.000001)
             {
                 break;
             }
 
-            var nextDisplay = FindDiscreteDisplay(
-                rowDirection,
-                columnDirection);
-            if (nextDisplay is null)
+            var horizontalTime = BoundaryTime(u, remainingX);
+            var verticalTime = BoundaryTime(v, remainingY);
+            var travelTime = Math.Min(1, Math.Min(horizontalTime, verticalTime));
+            u += remainingX * travelTime;
+            v += remainingY * travelTime;
+            if (travelTime >= 1)
             {
-                u = Math.Clamp(u, 0, 1);
+                break;
+            }
+
+            var remainder = 1 - travelTime;
+            remainingX *= remainder;
+            remainingY *= remainder;
+
+            // Resolve one shared edge at a time. A diagonal movement therefore
+            // still passes through the screen that owns the first crossed edge.
+            if (horizontalTime <= verticalTime)
+            {
+                var direction = remainingX > 0 ? 1 : -1;
+                var crossingY = bounds.Top
+                    + Math.Clamp(v, 0, 1) * height;
+                var nextDisplay = FindHorizontalNeighbor(
+                    direction,
+                    crossingY);
+                if (nextDisplay is null)
+                {
+                    remainingX = 0;
+                    u = Math.Clamp(u, 0, 1);
+                    continue;
+                }
+
+                Display = nextDisplay;
+                bounds = nextDisplay.Bounds;
+                width = Math.Max(bounds.Width - 1, 1);
+                height = Math.Max(bounds.Height - 1, 1);
+                u = direction > 0 ? 0 : 1;
+                // Once two displays share a side, treat their entire logical
+                // edges as aligned. Keeping the normalized perpendicular
+                // position removes dead zones caused by size or offset.
                 v = Math.Clamp(v, 0, 1);
-                break;
             }
+            else
+            {
+                var direction = remainingY > 0 ? 1 : -1;
+                var crossingX = bounds.Left
+                    + Math.Clamp(u, 0, 1) * width;
+                var nextDisplay = FindVerticalNeighbor(
+                    direction,
+                    crossingX);
+                if (nextDisplay is null)
+                {
+                    remainingY = 0;
+                    v = Math.Clamp(v, 0, 1);
+                    continue;
+                }
 
-            if (columnDirection > 0)
-            {
-                u -= 1;
+                Display = nextDisplay;
+                bounds = nextDisplay.Bounds;
+                width = Math.Max(bounds.Width - 1, 1);
+                height = Math.Max(bounds.Height - 1, 1);
+                u = Math.Clamp(u, 0, 1);
+                v = direction > 0 ? 0 : 1;
             }
-            else if (columnDirection < 0)
-            {
-                u += 1;
-            }
-            if (rowDirection > 0)
-            {
-                v -= 1;
-            }
-            else if (rowDirection < 0)
-            {
-                v += 1;
-            }
-
-            Display = nextDisplay;
         }
 
-        bounds = Display.Bounds;
         _mapX = bounds.Left
             + Math.Clamp(u, 0, 1) * Math.Max(bounds.Width - 1, 1);
         _mapY = bounds.Top
             + Math.Clamp(v, 0, 1) * Math.Max(bounds.Height - 1, 1);
     }
 
-    private void MoveOnActualDisplayMap(
-        double mapDeltaX,
-        double mapDeltaY)
+    private static double BoundaryTime(double position, double delta)
     {
-        var proposedX = _mapX + mapDeltaX;
-        var proposedY = _mapY + mapDeltaY;
-        if (Contains(Display.Bounds, proposedX, proposedY))
+        if (delta > 0.000001)
         {
-            _mapX = proposedX;
-            _mapY = proposedY;
-            return;
+            return Math.Max(0, (1 - position) / delta);
         }
 
-        var containingDisplay = _displays.FirstOrDefault(
-            display => Contains(display.Bounds, proposedX, proposedY));
-        if (containingDisplay is not null)
+        if (delta < -0.000001)
         {
-            Display = containingDisplay;
-            _mapX = proposedX;
-            _mapY = proposedY;
-            return;
+            return Math.Max(0, -position / delta);
         }
 
-        var crossing = FindActualLayoutCrossing(
-            _mapX,
-            _mapY,
-            mapDeltaX,
-            mapDeltaY);
-        if (crossing is not null)
-        {
-            var (targetDisplay, entryX, entryY) = crossing.Value;
-            Display = targetDisplay;
-            _mapX = entryX;
-            _mapY = entryY;
-            return;
-        }
-
-        // Keep integrating through real virtual-desktop gaps. The visible
-        // pointer remains projected to the current display edge until the
-        // continuous map coordinate enters another display rectangle.
-        _mapX = proposedX;
-        _mapY = proposedY;
+        return double.PositiveInfinity;
     }
 
     private void StartScaleTransition(int depth, long? nowTicks)
@@ -313,159 +311,69 @@ public sealed class NineGridSession
             StepY);
     }
 
-    private DisplayMonitor? FindDiscreteDisplay(
-        int rowDirection,
-        int columnDirection)
+    private DisplayMonitor? FindHorizontalNeighbor(
+        int direction,
+        double crossingY)
     {
-        var currentCenter = Center(Display.Bounds);
+        var current = Display.Bounds;
         return _displays
             .Where(candidate => candidate.DeviceName != Display.DeviceName)
-            .Select(candidate =>
-            {
-                var candidateCenter = Center(candidate.Bounds);
-                var dx = candidateCenter.X - currentCenter.X;
-                var dy = candidateCenter.Y - currentCenter.Y;
-                return new
-                {
-                    Display = candidate,
-                    Direction = Octant(dx, dy),
-                    DistanceSquared =
-                        (long)dx * dx + (long)dy * dy
-                };
-            })
             .Where(candidate =>
-                candidate.Direction
-                    == (Row: rowDirection, Column: columnDirection))
-            .OrderBy(candidate => candidate.DistanceSquared)
-            .Select(candidate => candidate.Display)
+                direction > 0
+                    ? candidate.Bounds.Left == current.Right
+                    : candidate.Bounds.Right == current.Left)
+            .Where(candidate =>
+                Overlaps(current.Top, current.Bottom,
+                    candidate.Bounds.Top, candidate.Bounds.Bottom))
+            .OrderBy(candidate => DistanceToOverlap(
+                crossingY,
+                Math.Max(current.Top, candidate.Bounds.Top),
+                Math.Min(current.Bottom, candidate.Bounds.Bottom)))
+            .ThenBy(candidate => candidate.Number)
             .FirstOrDefault();
     }
 
-    private (DisplayMonitor Display, double X, double Y)?
-        FindActualLayoutCrossing(
-            double originX,
-            double originY,
-            double directionX,
-            double directionY)
+    private DisplayMonitor? FindVerticalNeighbor(
+        int direction,
+        double crossingX)
     {
-        var length = Math.Sqrt(
-            directionX * directionX + directionY * directionY);
-        if (length <= 0)
-        {
-            return null;
-        }
-
-        var crossing = _displays
+        var current = Display.Bounds;
+        return _displays
             .Where(candidate => candidate.DeviceName != Display.DeviceName)
-            .Select(candidate => new
-            {
-                Display = candidate,
-                Entry = RayRectangleEntry(
-                    originX,
-                    originY,
-                    directionX,
-                    directionY,
-                    candidate.Bounds)
-            })
             .Where(candidate =>
-                candidate.Entry is >= 0 and <= 1)
-            .OrderBy(candidate => candidate.Entry)
+                direction > 0
+                    ? candidate.Bounds.Top == current.Bottom
+                    : candidate.Bounds.Bottom == current.Top)
+            .Where(candidate =>
+                Overlaps(current.Left, current.Right,
+                    candidate.Bounds.Left, candidate.Bounds.Right))
+            .OrderBy(candidate => DistanceToOverlap(
+                crossingX,
+                Math.Max(current.Left, candidate.Bounds.Left),
+                Math.Min(current.Right, candidate.Bounds.Right)))
+            .ThenBy(candidate => candidate.Number)
             .FirstOrDefault();
-        if (crossing?.Entry is not double entry)
-        {
-            return null;
-        }
-
-        var unitX = directionX / length;
-        var unitY = directionY / length;
-        var bounds = crossing.Display.Bounds;
-        return (
-            crossing.Display,
-            Math.Clamp(
-                originX + directionX * entry + unitX,
-                bounds.Left,
-                bounds.Right - 1),
-            Math.Clamp(
-                originY + directionY * entry + unitY,
-                bounds.Top,
-                bounds.Bottom - 1));
     }
 
-    private static double? RayRectangleEntry(
-        double originX,
-        double originY,
-        double directionX,
-        double directionY,
-        Rectangle rectangle)
+    private static bool Overlaps(
+        int firstStart,
+        int firstEnd,
+        int secondStart,
+        int secondEnd) =>
+        Math.Max(firstStart, secondStart) < Math.Min(firstEnd, secondEnd);
+
+    private static double DistanceToOverlap(
+        double position,
+        int overlapStart,
+        int overlapEnd)
     {
-        var minimum = double.NegativeInfinity;
-        var maximum = double.PositiveInfinity;
-        if (!UpdateRayInterval(
-            originX,
-            directionX,
-            rectangle.Left,
-            rectangle.Right,
-            ref minimum,
-            ref maximum)
-            || !UpdateRayInterval(
-                originY,
-                directionY,
-                rectangle.Top,
-                rectangle.Bottom,
-                ref minimum,
-                ref maximum))
+        var lastPixel = overlapEnd - 1;
+        if (position < overlapStart)
         {
-            return null;
+            return overlapStart - position;
         }
 
-        var entry = Math.Max(minimum, 0);
-        return maximum >= entry ? entry : null;
-    }
-
-    private static bool UpdateRayInterval(
-        double origin,
-        double direction,
-        double minimumBound,
-        double maximumBound,
-        ref double minimum,
-        ref double maximum)
-    {
-        const double epsilon = 0.000001;
-        if (Math.Abs(direction) < epsilon)
-        {
-            return origin >= minimumBound && origin <= maximumBound;
-        }
-
-        var first = (minimumBound - origin) / direction;
-        var second = (maximumBound - origin) / direction;
-        if (first > second)
-        {
-            (first, second) = (second, first);
-        }
-
-        minimum = Math.Max(minimum, first);
-        maximum = Math.Min(maximum, second);
-        return maximum >= minimum;
-    }
-
-    private static (int Row, int Column) Octant(double dx, double dy)
-    {
-        var angle = Math.Atan2(dy, dx);
-        var octant = (int)Math.Round(
-            angle / (Math.PI / 4),
-            MidpointRounding.AwayFromZero);
-        octant = ((octant % 8) + 8) % 8;
-        return octant switch
-        {
-            0 => (0, 1),
-            1 => (1, 1),
-            2 => (1, 0),
-            3 => (1, -1),
-            4 => (0, -1),
-            5 => (-1, -1),
-            6 => (-1, 0),
-            _ => (-1, 1)
-        };
+        return position > lastPixel ? position - lastPixel : 0;
     }
 
     private DisplayMonitor FindDisplay(Point point)
@@ -502,24 +410,6 @@ public sealed class NineGridSession
                 (int)Math.Round(_mapY),
                 bounds.Top,
                 bounds.Bottom - 1));
-    }
-
-    private static bool Contains(
-        Rectangle bounds,
-        double x,
-        double y)
-    {
-        return x >= bounds.Left
-            && x < bounds.Right
-            && y >= bounds.Top
-            && y < bounds.Bottom;
-    }
-
-    private static Point Center(Rectangle region)
-    {
-        return new Point(
-            region.Left + region.Width / 2,
-            region.Top + region.Height / 2);
     }
 
     public static IReadOnlyList<DisplayMonitor> GetDisplays()

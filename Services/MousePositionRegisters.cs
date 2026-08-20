@@ -1,6 +1,6 @@
 using System.Drawing;
 
-namespace MouseAccelerator.Services;
+namespace PrecisionJump.Services;
 
 internal static class MousePositionRegisters
 {

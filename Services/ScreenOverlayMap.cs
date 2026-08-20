@@ -1,8 +1,8 @@
 using Microsoft.Win32;
 using System.Windows.Threading;
-using MouseAccelerator.Views;
+using PrecisionJump.Views;
 
-namespace MouseAccelerator.Services;
+namespace PrecisionJump.Services;
 
 public sealed class ScreenOverlayMap : IDisposable
 {
@@ -27,7 +27,6 @@ public sealed class ScreenOverlayMap : IDisposable
 
     public void ShowPreview(NineGridPreview preview)
     {
-        EnsureCurrentMap();
         foreach (var (deviceName, item) in _windows)
         {
             var isSelectedDisplay =
@@ -99,20 +98,6 @@ public sealed class ScreenOverlayMap : IDisposable
         }
 
         DisplaysChanged?.Invoke(Displays);
-    }
-
-    private void EnsureCurrentMap()
-    {
-        var current = NineGridSession.GetDisplays();
-        if (
-            current.Count != _windows.Count
-            || current.Any(display =>
-                !_windows.TryGetValue(display.DeviceName, out var mapped)
-                || mapped.Display.Bounds != display.Bounds)
-        )
-        {
-            Refresh();
-        }
     }
 
     private void DisplaySettingsChanged(object? sender, EventArgs e)

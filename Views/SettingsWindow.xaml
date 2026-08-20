@@ -1,280 +1,208 @@
-<Window x:Class="MouseAccelerator.Views.SettingsWindow"
+<Window x:Class="PrecisionJump.Views.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Precision Jump"
-        Width="530"
-        Height="820"
-        MinWidth="500"
-        MinHeight="560"
+        Width="460"
+        Height="690"
+        MinWidth="420"
+        MinHeight="520"
+        Background="White"
         WindowStartupLocation="CenterScreen"
         PreviewKeyDown="Window_PreviewKeyDown"
         Closed="Window_Closed">
+    <Window.Resources>
+        <Style x:Key="SectionStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+        </Style>
+        <Style x:Key="ShortcutStyle" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Consolas"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+        </Style>
+        <Style x:Key="TextButtonStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+        </Style>
+    </Window.Resources>
+
     <ScrollViewer VerticalScrollBarVisibility="Auto"
                   HorizontalScrollBarVisibility="Disabled">
-        <Grid Margin="24">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-
-            <Grid Grid.Row="0" Margin="2,0,2,22">
+        <StackPanel Margin="28,24,28,22">
+            <Grid Margin="0,0,0,28">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-
                 <Image x:Name="HeaderIcon"
-                       Width="52"
-                       Height="52"
+                       Width="34"
+                       Height="34"
                        Stretch="Uniform"/>
-
-                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="14,0,0,0">
-                    <TextBlock Text="Precision Jump" FontSize="22" FontWeight="SemiBold"/>
+                <StackPanel Grid.Column="1" Margin="12,0,0,0">
+                    <TextBlock Text="Precision Jump"
+                               FontSize="18"
+                               FontWeight="SemiBold"/>
                     <TextBlock x:Name="StatusText"
-                               Text="Ready in the background"
-                               FontSize="12"
+                               Text="Ready"
+                               FontSize="11"
                                Foreground="{StaticResource MutedBrush}"
-                               Margin="0,3,0,0"/>
+                               Margin="0,2,0,0"/>
                 </StackPanel>
-
                 <CheckBox Grid.Column="2"
                           Content="Enabled"
                           IsChecked="{Binding Enabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                           FontWeight="SemiBold"/>
             </Grid>
 
-            <Border Grid.Row="1" Style="{StaticResource CardStyle}">
-                <StackPanel>
-                    <TextBlock Text="SHORTCUT" Style="{StaticResource SectionLabelStyle}"/>
+            <TextBlock Text="ACTIVATION" Style="{StaticResource SectionStyle}"/>
+            <Grid Margin="0,12,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Shortcut" VerticalAlignment="Center"/>
+                <TextBlock x:Name="ScreenJumpDisplay"
+                           Grid.Column="1"
+                           Text="{Binding ScreenJumpDisplay}"
+                           Style="{StaticResource ShortcutStyle}"
+                           Margin="12,0"/>
+                <Button x:Name="RecordScreenJumpButton"
+                        Grid.Column="2"
+                        Content="Change"
+                        Style="{StaticResource TextButtonStyle}"
+                        Click="RecordScreenJump_Click"/>
+            </Grid>
+            <Grid Margin="0,14,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Sequence timeout" FontSize="12"/>
+                <TextBlock Grid.Column="1"
+                           Text="{Binding SequenceTimeoutSeconds, StringFormat={}{0:F2} s}"
+                           Foreground="{StaticResource MutedBrush}"
+                           FontSize="11"/>
+            </Grid>
+            <Slider Minimum="0.18"
+                    Maximum="1"
+                    TickFrequency="0.01"
+                    IsSnapToTickEnabled="True"
+                    Value="{Binding SequenceTimeoutSeconds, Mode=TwoWay}"/>
 
-                    <Grid Margin="0,0,0,16">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="Hold final key" VerticalAlignment="Center"/>
-                        <Border Grid.Column="1"
-                                Background="#F0F3F4"
-                                CornerRadius="7"
-                                Padding="10,6"
-                                Margin="14,0,10,0"
-                                HorizontalAlignment="Right">
-                            <TextBlock x:Name="ScreenJumpDisplay"
-                                       Text="{Binding ScreenJumpDisplay}"
-                                       FontFamily="Consolas"
-                                       FontWeight="SemiBold"/>
-                        </Border>
-                        <Button x:Name="RecordScreenJumpButton"
-                                Grid.Column="2"
-                                Content="Record"
-                                Click="RecordScreenJump_Click"/>
-                    </Grid>
+            <Separator Margin="0,24" Background="{StaticResource LineBrush}"/>
 
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="Maximum sequence gap"/>
-                        <TextBlock Grid.Column="1"
-                                   Style="{StaticResource ValueStyle}"
-                                   Text="{Binding SequenceTimeoutSeconds, StringFormat={}{0:F2} s}"/>
-                    </Grid>
-                    <Slider Minimum="0.18"
-                            Maximum="1"
-                            TickFrequency="0.01"
-                            IsSnapToTickEnabled="True"
-                            Value="{Binding SequenceTimeoutSeconds, Mode=TwoWay}"/>
-                </StackPanel>
-            </Border>
+            <Grid>
+                <TextBlock Text="POSITION MARKS" Style="{StaticResource SectionStyle}"/>
+                <CheckBox Content="Enabled"
+                          HorizontalAlignment="Right"
+                          IsChecked="{Binding PositionMarksEnabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+            </Grid>
+            <Grid Margin="0,14,0,0" IsEnabled="{Binding PositionMarksEnabled}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Save to A–Z / 0–9" VerticalAlignment="Center"/>
+                <TextBlock x:Name="SavePositionDisplay"
+                           Grid.Column="1"
+                           Text="{Binding SavePositionDisplay}"
+                           Style="{StaticResource ShortcutStyle}"
+                           Margin="12,0"/>
+                <Button x:Name="RecordSavePositionButton"
+                        Grid.Column="2"
+                        Content="Change"
+                        Style="{StaticResource TextButtonStyle}"
+                        Click="RecordSavePosition_Click"/>
+            </Grid>
+            <Grid Margin="0,8,0,0" IsEnabled="{Binding PositionMarksEnabled}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Jump to A–Z / 0–9" VerticalAlignment="Center"/>
+                <TextBlock x:Name="RecallPositionDisplay"
+                           Grid.Column="1"
+                           Text="{Binding RecallPositionDisplay}"
+                           Style="{StaticResource ShortcutStyle}"
+                           Margin="12,0"/>
+                <Button x:Name="RecordRecallPositionButton"
+                        Grid.Column="2"
+                        Content="Change"
+                        Style="{StaticResource TextButtonStyle}"
+                        Click="RecordRecallPosition_Click"/>
+            </Grid>
+            <Grid Margin="0,10,0,0">
+                <TextBlock FontSize="11" Foreground="{StaticResource MutedBrush}">
+                    <Run Text="{Binding SavedPositionCount, Mode=OneWay}"/>
+                    <Run Text=" saved"/>
+                </TextBlock>
+                <Button Content="Clear"
+                        HorizontalAlignment="Right"
+                        Style="{StaticResource TextButtonStyle}"
+                        IsEnabled="{Binding PositionMarksEnabled}"
+                        Click="ClearSavedPositions_Click"/>
+            </Grid>
 
-            <Border Grid.Row="2" Style="{StaticResource CardStyle}">
-                <StackPanel>
-                    <TextBlock Text="POSITION MARKS" Style="{StaticResource SectionLabelStyle}"/>
+            <Separator Margin="0,24" Background="{StaticResource LineBrush}"/>
 
-                    <CheckBox Content="Enable saved pointer positions"
-                              IsChecked="{Binding PositionMarksEnabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                              FontWeight="SemiBold"
-                              Margin="0,0,0,14"/>
+            <TextBlock Text="MOVEMENT" Style="{StaticResource SectionStyle}"/>
+            <Grid Margin="0,14,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Travel per map unit"/>
+                <TextBlock Grid.Column="1"
+                           Text="{Binding SelectionDistance, StringFormat={}{0:F0} px}"
+                           Foreground="{StaticResource MutedBrush}"/>
+            </Grid>
+            <Slider Minimum="8"
+                    Maximum="120"
+                    TickFrequency="2"
+                    IsSnapToTickEnabled="True"
+                    Value="{Binding SelectionDistance, Mode=TwoWay}"/>
+            <Grid Margin="0,14,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Maximum zoom depth"/>
+                <TextBlock Grid.Column="1"
+                           Text="{Binding MaximumZoomLevel}"
+                           Foreground="{StaticResource MutedBrush}"/>
+            </Grid>
+            <Slider Minimum="1"
+                    Maximum="10"
+                    TickFrequency="1"
+                    IsSnapToTickEnabled="True"
+                    Value="{Binding MaximumZoomLevel, Mode=TwoWay}"/>
 
-                    <Grid Margin="0,0,0,12"
-                          IsEnabled="{Binding PositionMarksEnabled}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="Save shortcut" VerticalAlignment="Center"/>
-                        <Border Grid.Column="1"
-                                Background="#F0F3F4"
-                                CornerRadius="7"
-                                Padding="10,6"
-                                Margin="14,0,10,0"
-                                HorizontalAlignment="Right">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock x:Name="SavePositionDisplay"
-                                           Text="{Binding SavePositionDisplay}"
-                                           FontFamily="Consolas"
-                                           FontWeight="SemiBold"/>
-                                <TextBlock Text="  →  [A–Z / 0–9]"
-                                           FontFamily="Consolas"
-                                           FontWeight="SemiBold"/>
-                            </StackPanel>
-                        </Border>
-                        <Button x:Name="RecordSavePositionButton"
-                                Grid.Column="2"
-                                Content="Record"
-                                Click="RecordSavePosition_Click"/>
-                    </Grid>
+            <Separator Margin="0,24" Background="{StaticResource LineBrush}"/>
 
-                    <Grid IsEnabled="{Binding PositionMarksEnabled}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="Jump shortcut" VerticalAlignment="Center"/>
-                        <Border Grid.Column="1"
-                                Background="#F0F3F4"
-                                CornerRadius="7"
-                                Padding="10,6"
-                                Margin="14,0,10,0"
-                                HorizontalAlignment="Right">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock x:Name="RecallPositionDisplay"
-                                           Text="{Binding RecallPositionDisplay}"
-                                           FontFamily="Consolas"
-                                           FontWeight="SemiBold"/>
-                                <TextBlock Text="  →  [A–Z / 0–9]"
-                                           FontFamily="Consolas"
-                                           FontWeight="SemiBold"/>
-                            </StackPanel>
-                        </Border>
-                        <Button x:Name="RecordRecallPositionButton"
-                                Grid.Column="2"
-                                Content="Record"
-                                Click="RecordRecallPosition_Click"/>
-                    </Grid>
+            <TextBlock Text="OPTIONS" Style="{StaticResource SectionStyle}"/>
+            <CheckBox Content="Show status HUD"
+                      IsChecked="{Binding ShowStatusHud, Mode=TwoWay}"
+                      Margin="0,14,0,0"/>
+            <CheckBox Content="Record mouse events to CSV"
+                      IsChecked="{Binding RecordMouseEvents, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                      Margin="0,10,0,0"/>
 
-                    <Grid Margin="0,12,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Foreground="{StaticResource MutedBrush}"
-                                   FontSize="11"
-                                   TextWrapping="Wrap"
-                                   VerticalAlignment="Center">
-                            <Run Text="Saved slots persist across restarts · "/>
-                            <Run Text="{Binding SavedPositionCount, Mode=OneWay}"/>
-                            <Run Text=" of 36 used"/>
-                        </TextBlock>
-                        <Button Grid.Column="1"
-                                Content="Clear saved slots"
-                                Padding="8,4"
-                                IsEnabled="{Binding PositionMarksEnabled}"
-                                Click="ClearSavedPositions_Click"/>
-                    </Grid>
-                </StackPanel>
-            </Border>
-
-            <Border Grid.Row="3" Style="{StaticResource CardStyle}">
-                <StackPanel>
-                    <TextBlock Text="CONTINUOUS MAP" Style="{StaticResource SectionLabelStyle}"/>
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="Physical travel per map unit"/>
-                        <TextBlock Grid.Column="1"
-                                   Style="{StaticResource ValueStyle}"
-                                   Text="{Binding SelectionDistance, StringFormat={}{0:F0} px}"/>
-                    </Grid>
-                    <Slider Minimum="8"
-                            Maximum="120"
-                            TickFrequency="2"
-                            IsSnapToTickEnabled="True"
-                            Value="{Binding SelectionDistance, Mode=TwoWay}"/>
-
-                    <Grid Margin="0,14,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="Maximum refinement depth"/>
-                        <TextBlock Grid.Column="1"
-                                   Style="{StaticResource ValueStyle}"
-                                   Text="{Binding MaximumZoomLevel, StringFormat={}{0}}"/>
-                    </Grid>
-                    <Slider Minimum="1"
-                            Maximum="10"
-                            TickFrequency="1"
-                            IsSnapToTickEnabled="True"
-                            Value="{Binding MaximumZoomLevel, Mode=TwoWay}"/>
-
-                    <CheckBox Content="Show confirm/cancel HUD"
-                              IsChecked="{Binding ShowStatusHud, Mode=TwoWay}"
-                              Margin="0,16,0,0"/>
-
-                    <CheckBox Content="Record mouse movement and clicks to CSV"
-                              IsChecked="{Binding RecordMouseEvents, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                              Margin="0,12,0,0"/>
-                    <TextBlock Text="CSV: %LOCALAPPDATA%\MouseAccelerator\mouse-events-&lt;session UTC&gt;.csv"
-                               TextWrapping="Wrap"
-                               FontSize="11"
-                               Foreground="{StaticResource MutedBrush}"
-                               Margin="24,3,0,0"/>
-
-                </StackPanel>
-            </Border>
-
-            <StackPanel Grid.Row="4">
-                <Border Background="#EAF3F2"
-                        CornerRadius="12"
-                        Padding="15"
-                        Margin="0,0,0,16">
-                    <StackPanel>
-                        <TextBlock Text="HOW IT WORKS"
-                                   Style="{StaticResource SectionLabelStyle}"
-                                   Margin="0,0,0,10"/>
-                        <TextBlock Text="Physical mouse deltas move continuously through the connected display map."
-                                   TextWrapping="Wrap"
-                                   FontSize="12"
-                                   Margin="0,0,0,6"/>
-                        <TextBlock Text="Wheel up to zoom in for precision or down to zoom out for acceleration. Scaling is smoothly animated."
-                                   TextWrapping="Wrap"
-                                   FontSize="12"
-                                   Foreground="{StaticResource MutedBrush}"
-                                   Margin="0,0,0,6"/>
-                        <TextBlock Text="The coarsest topology uses eight-direction display links; zoomed movement follows the real display layout."
-                                   TextWrapping="Wrap"
-                                   FontSize="12"
-                                   Foreground="{StaticResource MutedBrush}"/>
-                    </StackPanel>
-                </Border>
-
-                <Grid Margin="2,0">
-                    <Button Content="Restore defaults"
-                            Padding="0"
-                            Background="Transparent"
-                            BorderThickness="0"
-                            Foreground="{StaticResource MutedBrush}"
-                            HorizontalAlignment="Left"
-                            Click="RestoreDefaults_Click"/>
-                    <TextBlock Text="Tray icon: Settings · Quit"
-                               HorizontalAlignment="Right"
-                               VerticalAlignment="Center"
-                               FontSize="11"
-                               Foreground="{StaticResource MutedBrush}"/>
-                </Grid>
-            </StackPanel>
-        </Grid>
+            <Button Content="Restore defaults"
+                    HorizontalAlignment="Left"
+                    Style="{StaticResource TextButtonStyle}"
+                    Foreground="{StaticResource MutedBrush}"
+                    Margin="-8,22,0,0"
+                    Click="RestoreDefaults_Click"/>
+        </StackPanel>
     </ScrollViewer>
 </Window>

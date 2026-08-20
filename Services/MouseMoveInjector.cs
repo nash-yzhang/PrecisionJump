@@ -1,26 +1,36 @@
 using System.Drawing;
 using System.Runtime.InteropServices;
 
-namespace MouseAccelerator.Services;
+namespace PrecisionJump.Services;
 
 internal sealed class MouseMoveInjector : IDisposable
 {
-    private sealed record Request(Point Target);
+    private static readonly int NativeInputSize =
+        Marshal.SizeOf<NativeMethods.Input>();
+
+    private sealed record VirtualDesktopMetrics(
+        int Left,
+        int Top,
+        int Width,
+        int Height);
 
     private readonly AutoResetEvent _workAvailable = new(false);
     private readonly Thread _thread;
-    private Request? _pending;
+    private VirtualDesktopMetrics _virtualDesktopMetrics;
+    private long _pendingPosition;
     private long _appliedPosition;
+    private int _hasPendingPosition;
     private int _hasAppliedPosition;
-    private int _injecting;
     private int _stopping;
 
     internal MouseMoveInjector()
     {
+        _virtualDesktopMetrics = ReadVirtualDesktopMetrics();
         _thread = new Thread(WorkerLoop)
         {
             IsBackground = true,
-            Name = "PrecisionJump.MouseInjector"
+            Name = "PrecisionJump.MouseInjector",
+            Priority = ThreadPriority.AboveNormal
         };
         _thread.Start();
     }
@@ -32,11 +42,17 @@ internal sealed class MouseMoveInjector : IDisposable
             return;
         }
 
-        Interlocked.Exchange(ref _pending, new Request(target));
+        Interlocked.Exchange(ref _pendingPosition, Pack(target));
+        Volatile.Write(ref _hasPendingPosition, 1);
         _workAvailable.Set();
     }
 
-    internal bool IsInjecting => Volatile.Read(ref _injecting) != 0;
+    internal void RefreshVirtualDesktopMetrics()
+    {
+        Volatile.Write(
+            ref _virtualDesktopMetrics,
+            ReadVirtualDesktopMetrics());
+    }
 
     internal Point AppliedPosition
     {
@@ -76,38 +92,27 @@ internal sealed class MouseMoveInjector : IDisposable
                 break;
             }
 
-            var request = Interlocked.Exchange(ref _pending, null);
-            if (request is not null)
+            while (Interlocked.Exchange(ref _hasPendingPosition, 0) != 0)
             {
-                Volatile.Write(ref _injecting, 1);
-                try
+                var target = Unpack(
+                    Interlocked.Read(ref _pendingPosition));
+                SendAbsoluteMouseMove(target);
+                if (Volatile.Read(ref _stopping) != 0)
                 {
-                    SendAbsoluteMouseMove(request.Target);
-                    ObservePosition(request.Target);
-                }
-                finally
-                {
-                    Volatile.Write(ref _injecting, 0);
+                    break;
                 }
             }
         }
     }
 
-    private static void SendAbsoluteMouseMove(Point target)
+    private void SendAbsoluteMouseMove(Point target)
     {
-        var left = NativeMethods.GetSystemMetrics(NativeMethods.SmXVirtualScreen);
-        var top = NativeMethods.GetSystemMetrics(NativeMethods.SmYVirtualScreen);
-        var width = Math.Max(
-            NativeMethods.GetSystemMetrics(NativeMethods.SmCxVirtualScreen),
-            2);
-        var height = Math.Max(
-            NativeMethods.GetSystemMetrics(NativeMethods.SmCyVirtualScreen),
-            2);
+        var metrics = Volatile.Read(ref _virtualDesktopMetrics);
 
         var normalizedX = (int)Math.Round(
-            (target.X - left) * 65_535d / (width - 1));
+            (target.X - metrics.Left) * 65_535d / (metrics.Width - 1));
         var normalizedY = (int)Math.Round(
-            (target.Y - top) * 65_535d / (height - 1));
+            (target.Y - metrics.Top) * 65_535d / (metrics.Height - 1));
         var input = new NativeMethods.Input
         {
             Type = NativeMethods.InputMouse,
@@ -118,7 +123,6 @@ internal sealed class MouseMoveInjector : IDisposable
                     X = Math.Clamp(normalizedX, 0, 65_535),
                     Y = Math.Clamp(normalizedY, 0, 65_535),
                     Flags = NativeMethods.MouseEventMove
-                        | NativeMethods.MouseEventMoveNoCoalesce
                         | NativeMethods.MouseEventAbsolute
                         | NativeMethods.MouseEventVirtualDesk,
                     ExtraInfo = NativeMethods.MouseInjectionMarker
@@ -128,11 +132,24 @@ internal sealed class MouseMoveInjector : IDisposable
 
         if (NativeMethods.SendInput(
             1,
-            [input],
-            Marshal.SizeOf<NativeMethods.Input>()) == 0)
+            ref input,
+            NativeInputSize) == 0)
         {
             NativeMethods.SetCursorPos(target.X, target.Y);
         }
+    }
+
+    private static VirtualDesktopMetrics ReadVirtualDesktopMetrics()
+    {
+        return new VirtualDesktopMetrics(
+            NativeMethods.GetSystemMetrics(NativeMethods.SmXVirtualScreen),
+            NativeMethods.GetSystemMetrics(NativeMethods.SmYVirtualScreen),
+            Math.Max(
+                NativeMethods.GetSystemMetrics(NativeMethods.SmCxVirtualScreen),
+                2),
+            Math.Max(
+                NativeMethods.GetSystemMetrics(NativeMethods.SmCyVirtualScreen),
+                2));
     }
 
     private static long Pack(Point position)
@@ -154,7 +171,7 @@ internal sealed class MouseMoveInjector : IDisposable
             return;
         }
 
-        Interlocked.Exchange(ref _pending, null);
+        Volatile.Write(ref _hasPendingPosition, 0);
         _workAvailable.Set();
         if (_thread.Join(TimeSpan.FromMilliseconds(500)))
         {

@@ -2,9 +2,9 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
-using MouseAccelerator.Services;
+using PrecisionJump.Services;
 
-namespace MouseAccelerator.Views;
+namespace PrecisionJump.Views;
 
 public partial class OverlayWindow : Window
 {
@@ -44,13 +44,17 @@ public partial class OverlayWindow : Window
         _preview = preview;
         _isSelectedScreen = isSelectedScreen;
 
-        if (!IsVisible)
+        var needsShow = !IsVisible;
+        if (needsShow)
         {
             Show();
         }
 
         EnsureNativeWindow();
-        PositionWindow(preview.Display, show: true);
+        if (needsShow)
+        {
+            PositionWindow(preview.Display, show: true);
+        }
         RenderPreview();
     }
 

@@ -1,11 +1,11 @@
 using System.Threading;
 using System.Windows;
 using Microsoft.Win32;
-using MouseAccelerator.Models;
-using MouseAccelerator.Services;
-using MouseAccelerator.Views;
+using PrecisionJump.Models;
+using PrecisionJump.Services;
+using PrecisionJump.Views;
 
-namespace MouseAccelerator;
+namespace PrecisionJump;
 
 public partial class App : System.Windows.Application
 {

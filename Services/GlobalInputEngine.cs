@@ -3,13 +3,15 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Windows.Threading;
-using MouseAccelerator.Models;
-using MouseAccelerator.Views;
+using PrecisionJump.Models;
+using PrecisionJump.Views;
 
-namespace MouseAccelerator.Services;
+namespace PrecisionJump.Services;
 
 public sealed class GlobalInputEngine : IDisposable
 {
+    private const double PreviewFrameIntervalSeconds = 1d / 60;
+
     private enum PositionCommand
     {
         None,
@@ -61,6 +63,7 @@ public sealed class GlobalInputEngine : IDisposable
     private readonly LowLevelHookHost _hookHost;
 
     private DispatcherTimer? _scaleAnimationTimer;
+    private readonly DispatcherTimer _previewDelayTimer;
     private InputSettings _inputSettings;
     private IReadOnlyList<DisplayMonitor> _displaySnapshot;
     private NineGridSession? _gestureSession;
@@ -73,6 +76,7 @@ public sealed class GlobalInputEngine : IDisposable
     private bool _suppressXButtonUp;
     private NineGridPreview? _queuedPreview;
     private int _previewRenderQueued;
+    private long _lastPreviewRenderedAt;
     private long _lastMoveDiagnosticAt;
     private Point? _lastObservedCursorPosition;
     private ModeHudWindow? _hud;
@@ -91,6 +95,10 @@ public sealed class GlobalInputEngine : IDisposable
         _overlayMap.DisplaysChanged += OverlayMapOnDisplaysChanged;
         _mouseEventRecorder = new MouseEventRecorder();
         _mouseMoveInjector = new MouseMoveInjector();
+        _previewDelayTimer = new DispatcherTimer(
+            DispatcherPriority.Render,
+            dispatcher);
+        _previewDelayTimer.Tick += PreviewDelayTimerOnTick;
         _hookHost = new LowLevelHookHost(
             _keyboardCallback,
             _mouseCallback);
@@ -182,18 +190,17 @@ public sealed class GlobalInputEngine : IDisposable
                 Marshal.PtrToStructure<NativeMethods.MouseHookData>(lParam);
             var isInjected =
                 (hookData.Flags & NativeMethods.LlmhfInjected) != 0;
-            var isOwnInjection = isInjected
-                && hookData.ExtraInfo == NativeMethods.MouseInjectionMarker;
             var hookPosition = new Point(
                 hookData.Position.X,
                 hookData.Position.Y);
             if (isInjected && message == NativeMethods.WmMouseMove)
             {
                 _lastObservedCursorPosition = hookPosition;
-                if (!isOwnInjection)
-                {
-                    _mouseMoveInjector.ObservePosition(hookPosition);
-                }
+                // The hook position is the cursor position Windows actually
+                // applied. It can differ from the requested absolute target
+                // after virtual-desktop normalization, so it is the only safe
+                // baseline for the next physical delta.
+                _mouseMoveInjector.ObservePosition(hookPosition);
             }
             if (_gestureSession is not null)
             {
@@ -216,11 +223,6 @@ public sealed class GlobalInputEngine : IDisposable
                                 code,
                                 wParam,
                                 lParam);
-                        }
-
-                        if (_mouseMoveInjector.IsInjecting)
-                        {
-                            return 1;
                         }
 
                         var physicalDelta =
@@ -740,13 +742,37 @@ public sealed class GlobalInputEngine : IDisposable
 
     private void RenderQueuedPreview()
     {
+        if (Volatile.Read(ref _queuedPreview) is null)
+        {
+            Interlocked.Exchange(ref _previewRenderQueued, 0);
+            return;
+        }
+
+        var now = Stopwatch.GetTimestamp();
+        if (_lastPreviewRenderedAt != 0)
+        {
+            var elapsed = (now - _lastPreviewRenderedAt)
+                / (double)Stopwatch.Frequency;
+            var remaining = PreviewFrameIntervalSeconds - elapsed;
+            if (remaining > 0)
+            {
+                _previewDelayTimer.Stop();
+                _previewDelayTimer.Interval = TimeSpan.FromSeconds(
+                    Math.Max(remaining, 0.001));
+                _previewDelayTimer.Start();
+                return;
+            }
+        }
+
+        _previewDelayTimer.Stop();
         var queued = Interlocked.Exchange(ref _queuedPreview, null);
-        Interlocked.Exchange(ref _previewRenderQueued, 0);
         if (!_disposed && JumpActive && queued is not null)
         {
             _overlayMap.ShowPreview(queued);
+            _lastPreviewRenderedAt = Stopwatch.GetTimestamp();
         }
 
+        Interlocked.Exchange(ref _previewRenderQueued, 0);
         if (
             Volatile.Read(ref _queuedPreview) is not null
             && Interlocked.Exchange(ref _previewRenderQueued, 1) == 0
@@ -756,6 +782,12 @@ public sealed class GlobalInputEngine : IDisposable
                 RenderQueuedPreview,
                 DispatcherPriority.Render);
         }
+    }
+
+    private void PreviewDelayTimerOnTick(object? sender, EventArgs e)
+    {
+        _previewDelayTimer.Stop();
+        RenderQueuedPreview();
     }
 
     private void ConfirmGesture()
@@ -897,6 +929,7 @@ public sealed class GlobalInputEngine : IDisposable
     private void OverlayMapOnDisplaysChanged(
         IReadOnlyList<DisplayMonitor> displays)
     {
+        _mouseMoveInjector.RefreshVirtualDesktopMetrics();
         Volatile.Write(ref _displaySnapshot, displays.ToArray());
         _hookHost.Post(
             () => CancelGesture(
@@ -919,6 +952,8 @@ public sealed class GlobalInputEngine : IDisposable
         }
 
         _disposed = true;
+        _previewDelayTimer.Stop();
+        _previewDelayTimer.Tick -= PreviewDelayTimerOnTick;
         _settings.PropertyChanged -= SettingsOnPropertyChanged;
         _overlayMap.DisplaysChanged -= OverlayMapOnDisplaysChanged;
         Volatile.Write(ref _jumpActive, 0);

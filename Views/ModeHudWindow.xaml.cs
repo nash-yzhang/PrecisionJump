@@ -2,11 +2,11 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
-using MouseAccelerator.Services;
+using PrecisionJump.Services;
 using DrawingPoint = System.Drawing.Point;
 using MediaColor = System.Windows.Media.Color;
 
-namespace MouseAccelerator.Views;
+namespace PrecisionJump.Views;
 
 public enum HudTone
 {

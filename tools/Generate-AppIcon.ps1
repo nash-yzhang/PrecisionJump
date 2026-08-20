@@ -1,5 +1,5 @@
 param(
-    [string]$OutputPath = "$PSScriptRoot\..\Assets\MouseAccelerator.ico"
+    [string]$OutputPath = "$PSScriptRoot\..\Assets\PrecisionJump.ico"
 )
 
 Add-Type -AssemblyName System.Drawing

@@ -1,6 +1,6 @@
 using System.Windows.Input;
 
-namespace MouseAccelerator.Models;
+namespace PrecisionJump.Models;
 
 public sealed record KeyToken(int VirtualKey)
 {
