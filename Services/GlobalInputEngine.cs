@@ -92,6 +92,7 @@ public sealed class GlobalInputEngine : IDisposable
         _mouseCallback = MouseHookCallback;
         _overlayMap = new ScreenOverlayMap(dispatcher);
         _displaySnapshot = _overlayMap.Displays.ToArray();
+        _overlayMap.DisplaysInvalidated += OverlayMapOnDisplaysInvalidated;
         _overlayMap.DisplaysChanged += OverlayMapOnDisplaysChanged;
         _mouseEventRecorder = new MouseEventRecorder();
         _mouseMoveInjector = new MouseMoveInjector();
@@ -931,6 +932,10 @@ public sealed class GlobalInputEngine : IDisposable
     {
         _mouseMoveInjector.RefreshVirtualDesktopMetrics();
         Volatile.Write(ref _displaySnapshot, displays.ToArray());
+    }
+
+    private void OverlayMapOnDisplaysInvalidated()
+    {
         _hookHost.Post(
             () => CancelGesture(
                 restoreOrigin: false,
@@ -955,6 +960,7 @@ public sealed class GlobalInputEngine : IDisposable
         _previewDelayTimer.Stop();
         _previewDelayTimer.Tick -= PreviewDelayTimerOnTick;
         _settings.PropertyChanged -= SettingsOnPropertyChanged;
+        _overlayMap.DisplaysInvalidated -= OverlayMapOnDisplaysInvalidated;
         _overlayMap.DisplaysChanged -= OverlayMapOnDisplaysChanged;
         Volatile.Write(ref _jumpActive, 0);
         _hookHost.Dispose();
